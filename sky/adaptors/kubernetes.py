@@ -247,6 +247,7 @@ class RetryableClientWrapper:
         self._getter_kwargs = getter_kwargs
         self._last_refresh_time = time.time()
         self._refresh_lock = threading.Lock()
+        self._client_generation = 0
 
     def _should_refresh(self) -> bool:
         """True if this wrapper's refresh interval has elapsed."""
@@ -277,6 +278,38 @@ class RetryableClientWrapper:
             if logger is not None:
                 logger.debug(f'Error closing Kubernetes client: {e}')
 
+    def _replace_client_locked(self) -> None:
+        """Replace the client while the caller holds the refresh lock."""
+        old_client = self._client
+        new_client = self._getter(*self._getter_args, **self._getter_kwargs)
+        self._client = new_client
+        self._client_generation += 1
+        self._last_refresh_time = time.time()
+        self._close_client(old_client)
+
+    def _refresh_after_unauthorized(self, failed_generation: int) -> str:
+        """Refresh once unless another caller already replaced the client."""
+        with self._refresh_lock:
+            if self._client_generation != failed_generation:
+                return 'concurrent_refresh_reused'
+            self._replace_client_locked()
+            return 'client_recreated'
+
+    def _context_name(self) -> Any:
+        """Return the getter's context argument for structured diagnostics."""
+        if self._getter_args:
+            return self._getter_args[0]
+        return self._getter_kwargs.get('context')
+
+    def _log_unauthorized_refresh(self, method_name: str, outcome: str,
+                                  retry_succeeded: bool) -> None:
+        logger.warning(
+            'Kubernetes client authentication refresh: context=%s method=%s '
+            'refresh_outcome=%s retry_succeeded=%s exception="%s"',
+            self._context_name(), method_name, outcome,
+            str(retry_succeeded).lower(),
+            'kubernetes.client.exceptions.ApiException: (401)')
+
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._client, name)
         if not callable(attr):
@@ -290,13 +323,31 @@ class RetryableClientWrapper:
                         logger.debug(
                             'Refreshing Kubernetes client from kubeconfig '
                             'due to interval expiry.')
-                        old_client = self._client
-                        self._client = self._getter(*self._getter_args,
-                                                    **self._getter_kwargs)
-                        self._last_refresh_time = time.time()
-                        self._close_client(old_client)
-            method = getattr(self._client, name)
-            return method(*args, **kwargs)
+                        self._replace_client_locked()
+            client = self._client
+            generation = self._client_generation
+            method = getattr(client, name)
+            try:
+                return method(*args, **kwargs)
+            except kubernetes.client.exceptions.ApiException as error:
+                if error.status != 401:
+                    raise
+
+            try:
+                refresh_outcome = self._refresh_after_unauthorized(generation)
+            except Exception:  # pylint: disable=broad-except
+                self._log_unauthorized_refresh(name, 'client_recreation_failed',
+                                               False)
+                raise
+
+            retry_method = getattr(self._client, name)
+            try:
+                result = retry_method(*args, **kwargs)
+            except Exception:  # pylint: disable=broad-except
+                self._log_unauthorized_refresh(name, refresh_outcome, False)
+                raise
+            self._log_unauthorized_refresh(name, refresh_outcome, True)
+            return result
 
         # Cache on the instance so repeated accesses to the same method name
         # return the same closure without going through __getattr__ again.

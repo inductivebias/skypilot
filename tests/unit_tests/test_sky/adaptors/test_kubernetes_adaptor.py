@@ -2,8 +2,12 @@
 
 import concurrent.futures
 import gc
+import hashlib
 import os
+from pathlib import Path
+import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -198,6 +202,216 @@ def test_kubeconfig_refresh_interval_invalid_value_disables_refresh(
 
     interval = kubernetes._get_kubeconfig_refresh_interval_seconds()  # pylint: disable=protected-access
     assert interval == 0.0
+
+
+def _api_exception(status):
+    return kubernetes.kubernetes.client.exceptions.ApiException(status=status)
+
+
+def _fake_core_client(method):
+    api_client = MagicMock()
+    return SimpleNamespace(api_client=api_client, list_namespaced_pod=method)
+
+
+def test_client_401_refreshes_and_retries_once(caplog):
+    first_method = MagicMock(side_effect=_api_exception(401))
+    second_method = MagicMock(return_value='pods')
+    first_client = _fake_core_client(first_method)
+    second_client = _fake_core_client(second_method)
+    getter = MagicMock(return_value=second_client)
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-deploy-lambda-2',), {})
+
+    assert wrapper.list_namespaced_pod(namespace='default') == 'pods'
+
+    getter.assert_called_once_with('ssh-deploy-lambda-2')
+    first_method.assert_called_once_with(namespace='default')
+    second_method.assert_called_once_with(namespace='default')
+    first_client.api_client.close.assert_called_once_with()
+    assert 'kubernetes.client.exceptions.ApiException: (401)' in caplog.text
+    assert 'retry_succeeded=true' in caplog.text
+
+
+def test_client_second_401_propagates_without_loop(caplog):
+    first_error = _api_exception(401)
+    second_error = _api_exception(401)
+    first_client = _fake_core_client(MagicMock(side_effect=first_error))
+    second_client = _fake_core_client(MagicMock(side_effect=second_error))
+    getter = MagicMock(return_value=second_client)
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-deploy-lambda-2',), {})
+
+    with pytest.raises(type(second_error)) as raised:
+        wrapper.list_namespaced_pod(namespace='default')
+
+    assert raised.value is second_error
+    getter.assert_called_once_with('ssh-deploy-lambda-2')
+    assert second_client.list_namespaced_pod.call_count == 1
+    assert 'kubernetes.client.exceptions.ApiException: (401)' in caplog.text
+    assert 'retry_succeeded=false' in caplog.text
+
+
+def test_client_non_401_does_not_refresh():
+    forbidden = _api_exception(403)
+    first_client = _fake_core_client(MagicMock(side_effect=forbidden))
+    getter = MagicMock()
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-deploy-lambda-2',), {})
+
+    with pytest.raises(type(forbidden)) as raised:
+        wrapper.list_namespaced_pod(namespace='default')
+
+    assert raised.value is forbidden
+    getter.assert_not_called()
+    first_client.api_client.close.assert_not_called()
+
+
+def test_concurrent_401_refreshes_one_client_generation():
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def reject_with_401(*_args, **_kwargs):
+        barrier.wait(timeout=5)
+        raise _api_exception(401)
+
+    first_client = _fake_core_client(reject_with_401)
+    second_method = MagicMock(return_value='pods')
+    second_client = _fake_core_client(second_method)
+    getter = MagicMock(return_value=second_client)
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-deploy-lambda-2',), {})
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(
+            executor.map(
+                lambda _: wrapper.list_namespaced_pod(namespace='default'),
+                range(workers)))
+
+    assert results == ['pods'] * workers
+    getter.assert_called_once_with('ssh-deploy-lambda-2')
+    assert second_method.call_count == workers
+    first_client.api_client.close.assert_called_once_with()
+
+
+def test_401_refresh_preserves_context_and_closes_old_client():
+    first_client = _fake_core_client(MagicMock(side_effect=_api_exception(401)))
+    second_client = _fake_core_client(MagicMock(return_value='pods'))
+    calls = []
+
+    def getter(*args, **kwargs):
+        calls.append((args, kwargs))
+        return second_client
+
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-deploy-lambda-2',),
+                                                {'request_timeout': 30})
+
+    result = wrapper.list_namespaced_pod(namespace='training')
+
+    assert result == 'pods'
+    assert calls == [(('ssh-deploy-lambda-2',), {'request_timeout': 30})]
+    first_client.api_client.close.assert_called_once_with()
+
+
+def test_interval_refresh_reloads_replaced_exec_certificate(
+        monkeypatch, tmp_path):
+    cert_source = tmp_path / 'client.crt'
+    key_source = tmp_path / 'client.key'
+    invocation_log = tmp_path / 'invocations'
+    credential_script = tmp_path / 'credential.py'
+    kubeconfig = tmp_path / 'config'
+
+    cert_source.write_text('certificate-a', encoding='utf-8')
+    key_source.write_text('private-key-a', encoding='utf-8')
+    credential_script.write_text("""#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+
+certificate = Path(sys.argv[1]).read_text(encoding='utf-8')
+private_key = Path(sys.argv[2]).read_text(encoding='utf-8')
+log = Path(sys.argv[3])
+log.write_text(log.read_text(encoding='utf-8') + 'called\\n'
+               if log.exists() else 'called\\n', encoding='utf-8')
+print(json.dumps({
+    'apiVersion': 'client.authentication.k8s.io/v1beta1',
+    'kind': 'ExecCredential',
+    'status': {
+        'clientCertificateData': certificate,
+        'clientKeyData': private_key,
+    },
+}))
+""",
+                                 encoding='utf-8')
+    credential_script.chmod(0o755)
+    kubeconfig.write_text(f"""apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    insecure-skip-tls-verify: true
+    server: https://127.0.0.1:6443
+  name: cluster
+contexts:
+- context:
+    cluster: cluster
+    user: exec-user
+  name: ssh-replaced-slot
+current-context: ssh-replaced-slot
+users:
+- name: exec-user
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1beta1
+      command: {sys.executable}
+      args:
+      - {credential_script}
+      - {cert_source}
+      - {key_source}
+      - {invocation_log}
+""",
+                          encoding='utf-8')
+
+    class ProbeClient:
+
+        def __init__(self, api_client):
+            self.api_client = api_client
+
+        def probe(self):
+            return 'ok'
+
+    def getter(context):
+        api_client = kubernetes._get_api_client(context)  # pylint: disable=protected-access
+        return ProbeClient(api_client)
+
+    monkeypatch.setenv('KUBECONFIG', str(kubeconfig))
+    monkeypatch.setenv(kubernetes.KUBECONFIG_REFRESH_INTERVAL_ENV_VAR, '1')
+    _clear_refresh_interval_cache()
+    time_values = iter([0.0, 10.0, 10.0, 10.0])
+    monkeypatch.setattr(time, 'time', lambda: next(time_values, 10.0))
+
+    first_client = getter('ssh-replaced-slot')
+    wrapper = kubernetes.RetryableClientWrapper(first_client, getter,
+                                                ('ssh-replaced-slot',), {})
+    first_certificate_path = Path(
+        first_client.api_client.configuration.cert_file)
+    first_fingerprint = hashlib.sha256(
+        first_certificate_path.read_bytes()).hexdigest()
+
+    cert_source.write_text('certificate-b', encoding='utf-8')
+    key_source.write_text('private-key-b', encoding='utf-8')
+    assert wrapper.probe() == 'ok'
+
+    refreshed_client = wrapper._client  # pylint: disable=protected-access
+    second_certificate_path = Path(
+        refreshed_client.api_client.configuration.cert_file)
+    second_fingerprint = hashlib.sha256(
+        second_certificate_path.read_bytes()).hexdigest()
+    assert first_fingerprint != second_fingerprint
+    assert second_certificate_path.read_text(
+        encoding='utf-8') == 'certificate-b'
+    assert invocation_log.read_text(encoding='utf-8').splitlines() == [
+        'called', 'called'
+    ]
 
 
 def _create_test_kubeconfig(num_contexts):
