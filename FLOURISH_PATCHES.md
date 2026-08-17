@@ -14,10 +14,16 @@ manual edit under `site-packages`.
 - Upstream peeled commit: `b1431e52d97c22e9bb8fa8b67f162543754ddaf5`
 - Flourish branch: `flourish/kubernetes-401-refresh`
 - Flourish release tag: `flourish-v0.13.0-kubernetes-401-refresh.1`
+- Flourish source commit: `0b6f29fa6478d78054fac80218a5bcf0b8001ef1`
+- Release wheel: `skypilot-0.13.0-py3-none-any.whl`
+- Wheel SHA-256:
+  `f4da74ec17ed33ec79adf7accffbba9697ea2f55445b7ffae23ee9af4d294ac6`
 
-The release tag is a human-readable audit marker. Consumers must still pin the
-full commit SHA so moving or recreating a tag cannot change an installation.
-The deploy-api client and Sky API server pins must always move together.
+The release tag is the human-readable audit marker and identifies the reviewed
+source commit. Consumers install the release wheel and hash-lock its exact
+bytes, while recording the source commit and tag alongside that digest. The
+deploy-api client and Sky API server pins must always move together. Never
+replace a release asset or move a tag; publish a new numbered release instead.
 
 ## `flourish-v0.13.0-kubernetes-401-refresh.1`
 
@@ -100,8 +106,8 @@ No test uses a live Kubernetes cluster or cloud account.
 
 ### Flourish integration
 
-The Flourish repository records this release in both dependency inputs and
-both generated lock files:
+The Flourish repository records this release wheel in both dependency inputs
+and hash-locks it in both generated lock files:
 
 ```text
 infra/deploy/api/server/requirements.in
@@ -118,6 +124,11 @@ the replacement race. Neither mechanism is a substitute for the other.
 Build and deployment must use the supported Flourish setup path. Do not copy
 this file into a live virtualenv and do not patch a production installation by
 hand.
+
+The wheel is published on the GitHub release for the tag. GitHub-generated
+source archives are deliberately not used as install artifacts because their
+generated gzip bytes do not provide a stable single hash for
+`uv --require-hashes` across fetches.
 
 ### Rollback and removal
 
