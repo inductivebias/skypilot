@@ -13,11 +13,11 @@ manual edit under `site-packages`.
 - Upstream tag object: `77debbc66815e5adfe639f6e4d28c0c74afaf72b`
 - Upstream peeled commit: `b1431e52d97c22e9bb8fa8b67f162543754ddaf5`
 - Flourish branch: `flourish/kubernetes-401-refresh`
-- Flourish release tag: `flourish-v0.13.0-kubernetes-401-refresh.1`
-- Flourish source commit: `0b6f29fa6478d78054fac80218a5bcf0b8001ef1`
+- Flourish release tag: `flourish-v0.13.0-kubernetes-401-refresh.2`
+- Flourish source commit: `89becd8310c374ae12aa079881632f3c32e948c7`
 - Release wheel: `skypilot-0.13.0-py3-none-any.whl`
 - Wheel SHA-256:
-  `f4da74ec17ed33ec79adf7accffbba9697ea2f55445b7ffae23ee9af4d294ac6`
+  `6bea2658d3491804a89ff979331e6e800de3a4b49a6dc7af4a4c4cdfff1d258d`
 
 The release tag is the human-readable audit marker and identifies the reviewed
 source commit. Consumers install the release wheel and hash-lock its exact
@@ -55,14 +55,20 @@ compiled files are absent. After publishing, install the hash-locked wheel in
 the Flourish local server rehearsal; that rehearsal must receive HTTP 2xx from
 `http://127.0.0.1:46580/dashboard/` before production deployment.
 
-## `flourish-v0.13.0-kubernetes-401-refresh.1`
+## `flourish-v0.13.0-kubernetes-401-refresh.2`
+
+This is the first deployable release of the patch. Its wheel was built by the
+one-command path above, downloaded back from the GitHub release, and verified
+to contain `sky/dashboard/out/index.html` with the recorded SHA-256.
+
+### Rejected `.1` artifact
 
 The `.1` wheel is retained as incident evidence but must not be deployed. It
 was built without the required dashboard compilation step and therefore lacks
 `sky/dashboard/out/index.html`. Production rejected the rollout on 2026-08-17
 when `/dashboard/` returned HTTP 500, and rolled back to the upstream 0.13.0
 environment. Never replace the `.1` asset or move its tag; publish `.2` from a
-reviewed commit using the one-command builder above.
+reviewed commit using the one-command builder above. `.2` is that replacement.
 
 ### Why this patch exists
 
