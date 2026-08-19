@@ -2,12 +2,16 @@
 # pylint: disable=missing-class-docstring,protected-access
 
 import json
+import shutil
+import subprocess
+import threading
 
 import pytest
 
 from sky.ssh_node_pools.deploy import deploy
 
 _KUBECONFIG_PATH = '/tmp/kubeconfig'
+_KUBECTL_PATH = shutil.which('kubectl')
 
 
 class _FakeKubeconfig:
@@ -77,6 +81,60 @@ def _config_action(call):
     return call[4]
 
 
+def _run_real_kubectl(kubeconfig_path, *args, check=True):
+    assert _KUBECTL_PATH is not None
+    return subprocess.run(
+        [_KUBECTL_PATH, '--kubeconfig',
+         str(kubeconfig_path), *args],
+        check=check,
+        capture_output=True,
+        text=True)
+
+
+def test_kubeconfig_lock_path_does_not_conflict_with_kubectl_lock():
+    lock_path = deploy._kubeconfig_lock_path(_KUBECONFIG_PATH)
+
+    assert lock_path == f'{_KUBECONFIG_PATH}.sky-ssh-node-pools.lock'
+    assert lock_path != f'{_KUBECONFIG_PATH}.lock'
+
+
+def test_remove_kubeconfig_context_serializes_same_kubeconfig(
+        monkeypatch, tmp_path):
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    calls = []
+
+    def remove_locked(context_name, kubeconfig_path):
+        calls.append((context_name, kubeconfig_path))
+        if len(calls) == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+
+    monkeypatch.setattr(deploy, '_remove_kubeconfig_context_locked',
+                        remove_locked)
+    kubeconfig_path = str(tmp_path / 'config')
+    first = threading.Thread(target=deploy._remove_kubeconfig_context,
+                             args=('ssh-pool-a', kubeconfig_path))
+    second = threading.Thread(target=deploy._remove_kubeconfig_context,
+                              args=('ssh-pool-b', kubeconfig_path))
+
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second.start()
+    second.join(timeout=0.1)
+
+    assert second.is_alive()
+    assert calls == [('ssh-pool-a', kubeconfig_path)]
+
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == [('ssh-pool-a', kubeconfig_path),
+                     ('ssh-pool-b', kubeconfig_path)]
+
+
 def test_remove_kubeconfig_context_current_switches_before_delete(monkeypatch):
     config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'], 'ssh-pool-7')
     monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
@@ -92,6 +150,46 @@ def test_remove_kubeconfig_context_current_switches_before_delete(monkeypatch):
     use_context_call = next(
         call for call in config.calls if _config_action(call) == 'use-context')
     assert use_context_call[-1] == 'gke-prod'
+
+
+@pytest.mark.skipif(_KUBECTL_PATH is None, reason='kubectl is not installed')
+def test_remove_kubeconfig_context_real_kubectl_repairs_quoted_name_bug(
+        tmp_path):
+    kubeconfig_path = tmp_path / 'config'
+    gke_context = 'gke_flourish-gpu_us-central1-a_deploy-gke'
+    target_context = 'ssh-deploy-lambda-7'
+    for context_name in [gke_context, target_context]:
+        _run_real_kubectl(kubeconfig_path, 'config', 'set-cluster',
+                          context_name, '--server=https://127.0.0.1')
+        _run_real_kubectl(kubeconfig_path, 'config', 'set-credentials',
+                          context_name, '--token=synthetic')
+        _run_real_kubectl(kubeconfig_path, 'config', 'set-context',
+                          context_name, f'--cluster={context_name}',
+                          f'--user={context_name}')
+    _run_real_kubectl(kubeconfig_path, 'config', 'use-context', target_context)
+
+    old_fallback = _run_real_kubectl(kubeconfig_path, 'config', 'view', '-o',
+                                     'jsonpath=\'{.contexts[0].name}\'').stdout
+    single_quote = chr(39)
+    assert (old_fallback.startswith(single_quote) and
+            old_fallback.endswith(single_quote))
+    old_switch = _run_real_kubectl(kubeconfig_path,
+                                   'config',
+                                   'use-context',
+                                   old_fallback,
+                                   check=False)
+    assert old_switch.returncode != 0
+
+    deploy._remove_kubeconfig_context(target_context, str(kubeconfig_path))
+
+    state = json.loads(
+        _run_real_kubectl(kubeconfig_path, 'config', 'view', '--raw', '-o',
+                          'json').stdout)
+    assert state['current-context'] == gke_context
+    for key in ['contexts', 'clusters', 'users']:
+        assert target_context not in {
+            entry['name'] for entry in state.get(key) or []
+        }
 
 
 def test_remove_kubeconfig_context_non_current_preserves_current(monkeypatch):

@@ -32,6 +32,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 logger = sky_logging.init_logger(__name__)
 
 
+def _kubeconfig_lock_path(kubeconfig_path: str) -> str:
+    # kubectl reserves `<kubeconfig>.lock` for its own mutations.
+    return f'{kubeconfig_path}.sky-ssh-node-pools.lock'
+
+
 @dataclasses.dataclass(frozen=True)
 class _KubeconfigState:
     current_context: Optional[str]
@@ -88,7 +93,7 @@ def _read_kubeconfig_state(kubeconfig_path: str) -> _KubeconfigState:
 
 
 def _remove_kubeconfig_context(context_name: str, kubeconfig_path: str) -> None:
-    with filelock.FileLock(f'{kubeconfig_path}.lock'):
+    with filelock.FileLock(_kubeconfig_lock_path(kubeconfig_path)):
         _remove_kubeconfig_context_locked(context_name, kubeconfig_path)
 
 
@@ -141,7 +146,8 @@ def _remove_kubeconfig_context_locked(context_name: str,
             after.current_context not in after.contexts):
         raise RuntimeError(
             f'Kubeconfig current context {after.current_context!r} does not '
-            f'exist after removing {context_name!r}.')
+            f'exist after removing {context_name!r}. Remaining contexts: '
+            f'{after.contexts!r}.')
     if (before.current_context != context_name and
             after.current_context != before.current_context):
         raise RuntimeError(
@@ -959,7 +965,7 @@ def deploy_single_cluster(cluster_name,
                                      f'Error processing key data: {e}'
                                      f'{RESET_ALL}')
 
-        with filelock.FileLock(f'{kubeconfig_path}.lock'):
+        with filelock.FileLock(_kubeconfig_lock_path(kubeconfig_path)):
             # Create empty kubeconfig if it doesn't exist.
             if not os.path.isfile(kubeconfig_path):
                 open(kubeconfig_path, 'a', encoding='utf-8').close()
