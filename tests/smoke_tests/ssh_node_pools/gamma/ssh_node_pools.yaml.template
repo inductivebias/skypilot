@@ -1,0 +1,11 @@
+# Render this file with pool_config.py. Keep both pools on CPU-only gamma VMs.
+gamma-pool-keep:
+  hosts:
+  - GAMMA_KEEP_PRIVATE_IP
+  user: GAMMA_SSH_USER
+  identity_file: /absolute/path/to/gamma_ssh_key
+gamma-pool-remove:
+  hosts:
+  - GAMMA_REMOVE_PRIVATE_IP
+  user: GAMMA_SSH_USER
+  identity_file: /absolute/path/to/gamma_ssh_key
