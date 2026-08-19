@@ -2,15 +2,18 @@
 # pylint: disable=line-too-long
 import base64
 import concurrent.futures as cf
+import dataclasses
+import json
 import os
 import re
 import shlex
 import shutil
 import tempfile
 import textwrap
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import colorama
+import filelock
 import yaml
 
 from sky import sky_logging
@@ -27,6 +30,124 @@ RESET_ALL = colorama.Style.RESET_ALL
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 logger = sky_logging.init_logger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class _KubeconfigState:
+    current_context: Optional[str]
+    contexts: List[str]
+    clusters: List[str]
+    users: List[str]
+
+
+def _run_kubectl_config(kubeconfig_path: str, args: List[str],
+                        action: str) -> str:
+    result = deploy_utils.run_command(
+        ['kubectl', '--kubeconfig', kubeconfig_path, 'config', *args],
+        shell=False,
+        silent=True)
+    if result is None:
+        raise RuntimeError(
+            f'Failed to {action} in kubeconfig {kubeconfig_path!r}.')
+    return result
+
+
+def _kubeconfig_entry_names(config: Dict[str, Any], key: str) -> List[str]:
+    entries = config.get(key) or []
+    if not isinstance(entries, list):
+        raise RuntimeError(f'Kubeconfig field {key!r} is not a list.')
+    return [
+        entry['name']
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get('name'), str)
+    ]
+
+
+def _read_kubeconfig_state(kubeconfig_path: str) -> _KubeconfigState:
+    output = _run_kubectl_config(kubeconfig_path,
+                                 ['view', '--raw', '-o', 'json'],
+                                 'read kubeconfig')
+    try:
+        config = json.loads(output)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise RuntimeError(
+            f'Failed to parse kubeconfig {kubeconfig_path!r}.') from e
+    if not isinstance(config, dict):
+        raise RuntimeError(
+            f'Kubeconfig {kubeconfig_path!r} is not a JSON object.')
+
+    current_context = config.get('current-context')
+    if not isinstance(current_context, str) or not current_context:
+        current_context = None
+    return _KubeconfigState(
+        current_context=current_context,
+        contexts=_kubeconfig_entry_names(config, 'contexts'),
+        clusters=_kubeconfig_entry_names(config, 'clusters'),
+        users=_kubeconfig_entry_names(config, 'users'),
+    )
+
+
+def _remove_kubeconfig_context(context_name: str, kubeconfig_path: str) -> None:
+    with filelock.FileLock(f'{kubeconfig_path}.lock'):
+        _remove_kubeconfig_context_locked(context_name, kubeconfig_path)
+
+
+def _remove_kubeconfig_context_locked(context_name: str,
+                                      kubeconfig_path: str) -> None:
+    before = _read_kubeconfig_state(kubeconfig_path)
+    if (before.current_context is not None and
+            before.current_context not in before.contexts and
+            before.current_context != context_name):
+        raise RuntimeError(
+            f'Kubeconfig current context {before.current_context!r} does not '
+            'exist; refusing to change an unrelated invalid context.')
+
+    if before.current_context == context_name:
+        remaining_contexts = [
+            context for context in before.contexts if context != context_name
+        ]
+        if remaining_contexts:
+            fallback_context = remaining_contexts[0]
+            _run_kubectl_config(
+                kubeconfig_path, ['use-context', fallback_context],
+                f'switch current context to {fallback_context!r}')
+        else:
+            _run_kubectl_config(kubeconfig_path, ['unset', 'current-context'],
+                                'unset current context')
+
+    entry_groups = [
+        ('context', before.contexts, 'delete-context'),
+        ('cluster', before.clusters, 'delete-cluster'),
+        ('user', before.users, 'delete-user'),
+    ]
+    for entry_type, entries, command in entry_groups:
+        if context_name in entries:
+            _run_kubectl_config(kubeconfig_path, [command, context_name],
+                                f'delete {entry_type} {context_name!r}')
+
+    after = _read_kubeconfig_state(kubeconfig_path)
+    remaining_target_entries = [
+        entry_type for entry_type, entries in [
+            ('context', after.contexts),
+            ('cluster', after.clusters),
+            ('user', after.users),
+        ] if context_name in entries
+    ]
+    if remaining_target_entries:
+        raise RuntimeError(
+            f'Failed to remove kubeconfig entries for {context_name!r}: '
+            f'{", ".join(remaining_target_entries)} still present.')
+    if (after.current_context is not None and
+            after.current_context not in after.contexts):
+        raise RuntimeError(
+            f'Kubeconfig current context {after.current_context!r} does not '
+            f'exist after removing {context_name!r}.')
+    if (before.current_context != context_name and
+            after.current_context != before.current_context):
+        raise RuntimeError(
+            f'Kubeconfig current context changed from '
+            f'{before.current_context!r} to {after.current_context!r} while '
+            f'removing non-current context {context_name!r}.')
 
 
 def progress_message(message):
@@ -400,37 +521,7 @@ def deploy_single_cluster(cluster_name,
         if os.path.isfile(kubeconfig_path):
             logger.debug(
                 f'Removing context {context_name!r} from local kubeconfig...')
-            deploy_utils.run_command(
-                ['kubectl', 'config', 'delete-context', context_name],
-                shell=False,
-                silent=True)
-            deploy_utils.run_command(
-                ['kubectl', 'config', 'delete-cluster', context_name],
-                shell=False,
-                silent=True)
-            deploy_utils.run_command(
-                ['kubectl', 'config', 'delete-user', context_name],
-                shell=False,
-                silent=True)
-
-            # Update the current context to the first available context
-            contexts = deploy_utils.run_command([
-                'kubectl', 'config', 'view', '-o',
-                'jsonpath=\'{.contexts[0].name}\''
-            ],
-                                                shell=False,
-                                                silent=True)
-            if contexts:
-                deploy_utils.run_command(
-                    ['kubectl', 'config', 'use-context', contexts],
-                    shell=False,
-                    silent=True)
-            else:
-                # If no context is available, simply unset the current context
-                deploy_utils.run_command(
-                    ['kubectl', 'config', 'unset', 'current-context'],
-                    shell=False,
-                    silent=True)
+            _remove_kubeconfig_context(context_name, kubeconfig_path)
 
             logger.debug(
                 f'Context {context_name!r} removed from local kubeconfig.')
@@ -672,10 +763,6 @@ def deploy_single_cluster(cluster_name,
         # Create the directory for the kubeconfig file if it doesn't exist
         deploy_utils.ensure_directory_exists(kubeconfig_path)
 
-        # Create empty kubeconfig if it doesn't exist
-        if not os.path.isfile(kubeconfig_path):
-            open(kubeconfig_path, 'a', encoding='utf-8').close()
-
         # Modify the temporary kubeconfig to update server address and context name
         modified_config = os.path.join(temp_dir, 'modified_config')
         with open(temp_kubeconfig, 'r', encoding='utf-8') as f_in:
@@ -872,38 +959,47 @@ def deploy_single_cluster(cluster_name,
                                      f'Error processing key data: {e}'
                                      f'{RESET_ALL}')
 
-        # First check if context name exists and delete it if it does
-        # TODO(romilb): Should we throw an error here instead?
-        deploy_utils.run_command(
-            ['kubectl', 'config', 'delete-context', context_name],
-            shell=False,
-            silent=True)
-        deploy_utils.run_command(
-            ['kubectl', 'config', 'delete-cluster', context_name],
-            shell=False,
-            silent=True)
-        deploy_utils.run_command(
-            ['kubectl', 'config', 'delete-user', context_name],
-            shell=False,
-            silent=True)
+        with filelock.FileLock(f'{kubeconfig_path}.lock'):
+            # Create empty kubeconfig if it doesn't exist.
+            if not os.path.isfile(kubeconfig_path):
+                open(kubeconfig_path, 'a', encoding='utf-8').close()
 
-        # Merge the configurations using kubectl
-        merged_config = os.path.join(temp_dir, 'merged_config')
-        os.environ['KUBECONFIG'] = f'{kubeconfig_path}:{modified_config}'
-        with open(merged_config, 'w', encoding='utf-8') as merged_file:
-            kubectl_cmd = ['kubectl', 'config', 'view', '--flatten']
-            result = deploy_utils.run_command(kubectl_cmd, shell=False)
-            if result:
-                merged_file.write(result)
+            # First check if context name exists and delete it if it does
+            # TODO(romilb): Should we throw an error here instead?
+            deploy_utils.run_command([
+                'kubectl', '--kubeconfig', kubeconfig_path, 'config',
+                'delete-context', context_name
+            ],
+                                     shell=False,
+                                     silent=True)
+            deploy_utils.run_command([
+                'kubectl', '--kubeconfig', kubeconfig_path, 'config',
+                'delete-cluster', context_name
+            ],
+                                     shell=False,
+                                     silent=True)
+            deploy_utils.run_command([
+                'kubectl', '--kubeconfig', kubeconfig_path, 'config',
+                'delete-user', context_name
+            ],
+                                     shell=False,
+                                     silent=True)
 
-        # Replace the kubeconfig with the merged config
-        shutil.move(merged_config, kubeconfig_path)
+            # Merge the configurations using kubectl
+            merged_config = os.path.join(temp_dir, 'merged_config')
+            os.environ['KUBECONFIG'] = f'{kubeconfig_path}:{modified_config}'
+            with open(merged_config, 'w', encoding='utf-8') as merged_file:
+                kubectl_cmd = ['kubectl', 'config', 'view', '--flatten']
+                result = deploy_utils.run_command(kubectl_cmd, shell=False)
+                if result:
+                    merged_file.write(result)
 
-        # Set the new context as the current context
-        deploy_utils.run_command(
-            ['kubectl', 'config', 'use-context', context_name],
-            shell=False,
-            silent=True)
+            # Replace the kubeconfig with the merged config
+            shutil.move(merged_config, kubeconfig_path)
+
+            # Set the new context as the current context
+            _run_kubectl_config(kubeconfig_path, ['use-context', context_name],
+                                f'switch current context to {context_name!r}')
 
     # Always set up SSH tunnel since we assume only port 22 is accessible
     tunnel_utils.setup_kubectl_ssh_tunnel(head_node,

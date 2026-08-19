@@ -1,6 +1,179 @@
 """Unit tests for sky/ssh_node_pools/deploy/deploy.py helpers."""
+# pylint: disable=missing-class-docstring,protected-access
+
+import json
+
+import pytest
 
 from sky.ssh_node_pools.deploy import deploy
+
+_KUBECONFIG_PATH = '/tmp/kubeconfig'
+
+
+class _FakeKubeconfig:
+
+    def __init__(self,
+                 contexts,
+                 current_context,
+                 fail_action=None,
+                 dangling_after_cleanup=False):
+        self.contexts = list(contexts)
+        self.clusters = list(contexts)
+        self.users = list(contexts)
+        self.current_context = current_context
+        self.fail_action = fail_action
+        self.dangling_after_cleanup = dangling_after_cleanup
+        self.calls = []
+        self.view_count = 0
+
+    def run_command(self, cmd, shell=False, silent=False):
+        assert shell is False
+        assert silent is True
+        assert cmd[:4] == [
+            'kubectl', '--kubeconfig', _KUBECONFIG_PATH, 'config'
+        ]
+        self.calls.append(cmd)
+        args = cmd[4:]
+
+        if args == ['view', '--raw', '-o', 'json']:
+            self.view_count += 1
+            current_context = self.current_context
+            if self.dangling_after_cleanup and self.view_count > 1:
+                current_context = 'missing-context'
+            return json.dumps({
+                'current-context': current_context or '',
+                'contexts': [{
+                    'name': name
+                } for name in self.contexts],
+                'clusters': [{
+                    'name': name
+                } for name in self.clusters],
+                'users': [{
+                    'name': name
+                } for name in self.users],
+            })
+
+        action = args[0]
+        if action == self.fail_action:
+            return None
+        if action == 'use-context':
+            self.current_context = args[1]
+            return f'Switched to context {args[1]!r}.'
+        if action == 'unset':
+            self.current_context = None
+            return 'Property current-context unset.'
+
+        name = args[1]
+        entries = {
+            'delete-context': self.contexts,
+            'delete-cluster': self.clusters,
+            'delete-user': self.users,
+        }[action]
+        entries.remove(name)
+        return f'Deleted {name!r}.'
+
+
+def _config_action(call):
+    return call[4]
+
+
+def test_remove_kubeconfig_context_current_switches_before_delete(monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'], 'ssh-pool-7')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    assert config.current_context == 'gke-prod'
+    assert config.contexts == ['gke-prod']
+    assert config.clusters == ['gke-prod']
+    assert config.users == ['gke-prod']
+    actions = [_config_action(call) for call in config.calls]
+    assert actions.index('use-context') < actions.index('delete-context')
+    use_context_call = next(
+        call for call in config.calls if _config_action(call) == 'use-context')
+    assert use_context_call[-1] == 'gke-prod'
+
+
+def test_remove_kubeconfig_context_non_current_preserves_current(monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'], 'gke-prod')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    assert config.current_context == 'gke-prod'
+    actions = [_config_action(call) for call in config.calls]
+    assert 'use-context' not in actions
+    assert 'unset' not in actions
+
+
+def test_remove_kubeconfig_context_only_context_unsets_before_delete(
+        monkeypatch):
+    config = _FakeKubeconfig(['ssh-pool-7'], 'ssh-pool-7')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    assert config.current_context is None
+    actions = [_config_action(call) for call in config.calls]
+    assert actions.index('unset') < actions.index('delete-context')
+
+
+def test_remove_kubeconfig_context_dangling_target_repairs_before_cleanup(
+        monkeypatch):
+    config = _FakeKubeconfig(['gke-prod'], 'ssh-pool-7')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    assert config.current_context == 'gke-prod'
+    actions = [_config_action(call) for call in config.calls]
+    assert actions == ['view', 'use-context', 'view']
+
+
+def test_remove_kubeconfig_context_unrelated_dangling_current_fails_closed(
+        monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'], 'missing-context')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    with pytest.raises(RuntimeError, match='unrelated invalid context'):
+        deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    actions = [_config_action(call) for call in config.calls]
+    assert actions == ['view']
+
+
+def test_remove_kubeconfig_context_switch_failure_raises_before_delete(
+        monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'],
+                             'ssh-pool-7',
+                             fail_action='use-context')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    with pytest.raises(RuntimeError, match='switch current context'):
+        deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+    actions = [_config_action(call) for call in config.calls]
+    assert 'delete-context' not in actions
+
+
+def test_remove_kubeconfig_context_delete_failure_raises(monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'],
+                             'gke-prod',
+                             fail_action='delete-context')
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    with pytest.raises(RuntimeError, match='delete context'):
+        deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
+
+
+def test_remove_kubeconfig_context_dangling_postcondition_raises(monkeypatch):
+    config = _FakeKubeconfig(['gke-prod', 'ssh-pool-7'],
+                             'gke-prod',
+                             dangling_after_cleanup=True)
+    monkeypatch.setattr(deploy.deploy_utils, 'run_command', config.run_command)
+
+    with pytest.raises(RuntimeError, match='missing-context'):
+        deploy._remove_kubeconfig_context('ssh-pool-7', _KUBECONFIG_PATH)
 
 
 def test_prometheus_install_cmd_contains_required_fields():
@@ -50,7 +223,8 @@ def test_prometheus_install_cmd_contains_required_fields():
     assert 'HELM_RET=$?' in cmd
     assert 'exit $HELM_RET' in cmd
 
-    # Must enable node-exporter (the deliberate deviation from the skill example).
+    # Must enable node-exporter (the deliberate deviation from the skill
+    # example).
     assert 'prometheus-node-exporter' in cmd
 
     # pushgateway and alertmanager explicitly disabled.
