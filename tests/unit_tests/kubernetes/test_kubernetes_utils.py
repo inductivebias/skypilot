@@ -561,6 +561,28 @@ def test_detect_gpu_label_formatter_invalid_label_skip():
         utils.detect_gpu_label_formatter.cache_clear()
 
 
+def test_gke_rtxpro6000_accelerator_label_round_trip():
+    """G4's public name must round-trip through GKE's hyphenated label."""
+    assert utils.get_gke_accelerator_name('RTXPRO6000') == (
+        'nvidia-rtx-pro-6000')
+    assert utils.GKELabelFormatter.get_label_values('RTXPRO6000') == [
+        'nvidia-rtx-pro-6000'
+    ]
+    assert utils.GKELabelFormatter.get_accelerator_from_label_value(
+        'nvidia-rtx-pro-6000') == 'RTXPRO6000'
+
+
+def test_gke_autoscaler_matches_rtxpro6000_node_pool():
+    node_pool_accelerators = [{
+        'acceleratorType': 'nvidia-rtx-pro-6000',
+        'acceleratorCount': 4,
+    }]
+    assert utils.GKEAutoscaler._node_pool_has_gpu_capacity(  # pylint: disable=protected-access
+        node_pool_accelerators, 'RTXPRO6000', 4)
+    assert not utils.GKEAutoscaler._node_pool_has_gpu_capacity(  # pylint: disable=protected-access
+        node_pool_accelerators, 'RTXPRO6000', 8)
+
+
 def test_detect_gpu_label_formatter_suppresses_warning_for_coreweave_format():
     """Tests that warnings are not logged when GKE label keys have
     CoreWeave-formatted values (e.g., cloud.google.com/gke-accelerator=H100_NVLINK_80GB).
