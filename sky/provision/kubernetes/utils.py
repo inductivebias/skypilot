@@ -519,6 +519,11 @@ def get_gke_accelerator_name(accelerator: str) -> str:
     A100-80GB, H100-80GB, L4 are an exception. They use nvidia-<accelerator>.
     TPU types are an exception as well keeping the given name.
     """
+    if accelerator == 'RTXPRO6000':
+        # G4 uses a hyphenated GKE accelerator label, while SkyPilot's public
+        # name follows the existing RTXPRO6000 spelling used by other clouds.
+        # Handle it before the generic nvidia-tesla-* fallback.
+        return 'nvidia-rtx-pro-6000'
     if accelerator == 'H100':
         # H100 is named as H100-80GB in GKE.
         accelerator = 'H100-80GB'
@@ -707,6 +712,10 @@ class GKELabelFormatter(GPULabelFormatter):
                 return 'H100'
             elif acc == 'H200-141GB':
                 return 'H200'
+            elif acc == 'RTX-PRO-6000':
+                # Reverse the special case in get_gke_accelerator_name so
+                # catalog discovery and autoscaler fit checks use one name.
+                return 'RTXPRO6000'
             return acc
         elif is_tpu_on_gke(value):
             return value
