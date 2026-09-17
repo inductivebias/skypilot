@@ -116,7 +116,7 @@ const GpuUtilizationBar = ({
   const free = gpu?.gpu_free || 0;
   const used = Math.max(0, total - free - notReady);
   const notReadyLabel = `${notReady} not ready`;
-  const usedLabel = `${used} used`;
+  const usedLabel = `${used} allocated`;
   const freeLabel = `${free} free`;
   const toPercentage = total > 0 ? (value) => (value / total) * 100 : () => 0;
   const notReadyPercentage = toPercentage(notReady);
@@ -134,7 +134,7 @@ const GpuUtilizationBar = ({
             fontSize: 'clamp(8px, 1.2vw, 12px)',
           }}
           title={notReadyLabel}
-          className="bg-gray-400 h-full flex items-center justify-center text-white font-medium overflow-hidden whitespace-nowrap px-1"
+          className="bg-red-600 h-full flex items-center justify-center text-white font-medium overflow-hidden whitespace-nowrap px-1"
         >
           {notReadyPercentage > 15 && notReadyLabel}
         </div>
@@ -163,6 +163,76 @@ const GpuUtilizationBar = ({
           {freePercentage > 15 && freeLabel}
         </div>
       )}
+    </div>
+  );
+};
+
+// Aggregate GPU availability, optionally limited to selected contexts.
+// A GPU type can exist in both SSH and Kubernetes contexts, so filtering a
+// global aggregate by GPU name would repeat the combined total in both cards.
+export function aggregateGPUsForContexts(perContextGPUs, contexts) {
+  const selectedContexts = contexts ? new Set(contexts) : null;
+  const gpuSummary = new Map();
+
+  perContextGPUs.forEach((gpu) => {
+    if (selectedContexts && !selectedContexts.has(gpu.context)) return;
+
+    const gpuName = canonicalizeGpuName(gpu.gpu_name);
+    const summary = gpuSummary.get(gpuName) || {
+      gpu_name: gpuName,
+      gpu_total: 0,
+      gpu_free: 0,
+      gpu_not_ready: 0,
+    };
+    summary.gpu_total += gpu.gpu_total || 0;
+    summary.gpu_free += gpu.gpu_free || 0;
+    summary.gpu_not_ready += gpu.gpu_not_ready || 0;
+    gpuSummary.set(gpuName, summary);
+  });
+
+  return Array.from(gpuSummary.values());
+}
+
+// Aggregated per-GPU-type summary rendered above the unified infrastructure
+// table: one compact card per GPU type (type name + free/total count + a slim
+// segmented utilization bar). Hover the bar for the allocated / not-ready /
+// free breakdown. Sorted by capacity so the biggest fleets read first.
+export const GpuTypeSummaryStrip = ({ gpus }) => {
+  if (!gpus || gpus.length === 0) {
+    return null;
+  }
+  const sorted = [...gpus].sort(
+    (a, b) => (b.gpu_total || 0) - (a.gpu_total || 0)
+  );
+  return (
+    <div className="bg-gray-50 rounded-lg border border-gray-100 px-4 py-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-10 gap-y-3">
+        {sorted.map((gpu) => {
+          const free = gpu.gpu_free ?? 0;
+          const total = gpu.gpu_total ?? 0;
+          return (
+            <div key={gpu.gpu_name} className="min-w-0">
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                <span className="text-[13px] font-medium text-gray-800 truncate">
+                  {canonicalizeGpuName(gpu.gpu_name)}
+                </span>
+                <span className="text-xs text-gray-600 whitespace-nowrap tabular-nums">
+                  <span
+                    className={`font-semibold ${
+                      free > 0 ? 'text-gray-900' : 'text-gray-500'
+                    }`}
+                  >
+                    {free.toLocaleString()}
+                  </span>
+                  {' of '}
+                  {total.toLocaleString()} free
+                </span>
+              </div>
+              <GpuUtilizationBar gpu={gpu} wrapperClassName="w-full" />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -2023,7 +2093,6 @@ export function GPUs() {
   const router = useRouter();
 
   const [allKubeContextNames, setAllKubeContextNames] = useState([]);
-  const [allGPUs, setAllGPUs] = useState([]);
   const [perContextGPUs, setPerContextGPUs] = useState([]);
   const [perNodeGPUs, setPerNodeGPUs] = useState([]);
   // Track which contexts have had their GPU/node data loaded (for progressive loading)
@@ -2129,7 +2198,6 @@ export function GPUs() {
         // On error, we should still mark data as loaded but with empty values
         setWorkspaceInfrastructure({});
         setAllKubeContextNames([]);
-        setAllGPUs([]);
         setPerContextGPUs([]);
         setPerNodeGPUs([]);
         setContextStats({});
@@ -2193,7 +2261,6 @@ export function GPUs() {
       if (!contextsData) {
         setWorkspaceInfrastructure({});
         setAllKubeContextNames([]);
-        setAllGPUs([]);
         setPerContextGPUs([]);
         setPerNodeGPUs([]);
         setContextWorkspaceMap({});
@@ -2232,7 +2299,6 @@ export function GPUs() {
         // No contexts to fetch GPU data for
         // Only clear data during initial/manual refresh, not interval refresh
         if (showLoadingIndicators) {
-          setAllGPUs([]);
           setPerContextGPUs([]);
           setPerNodeGPUs([]);
           setContextErrors({});
@@ -2277,8 +2343,6 @@ export function GPUs() {
               return [...filtered, ...gpuData.perNodeGPUs];
             });
 
-            // Note: allGPUs is computed via useEffect when perContextGPUs changes
-
             // Update context errors if there was an error
             if (gpuData.error) {
               setContextErrors((prev) => ({
@@ -2310,7 +2374,6 @@ export function GPUs() {
       console.error('Error in fetchKubernetesData:', error);
       setWorkspaceInfrastructure({});
       setAllKubeContextNames([]);
-      setAllGPUs([]);
       setPerContextGPUs([]);
       setPerNodeGPUs([]);
       setContextWorkspaceMap({});
@@ -2505,27 +2568,6 @@ export function GPUs() {
     refreshDataRef.current = fetchData;
   }, [fetchData]);
 
-  // Compute allGPUs (aggregated totals) whenever perContextGPUs changes
-  useEffect(() => {
-    const gpuSummary = {};
-    perContextGPUs.forEach((gpu) => {
-      const gpuName = canonicalizeGpuName(gpu.gpu_name);
-      if (gpuName in gpuSummary) {
-        gpuSummary[gpuName].gpu_total += gpu.gpu_total || 0;
-        gpuSummary[gpuName].gpu_free += gpu.gpu_free || 0;
-        gpuSummary[gpuName].gpu_not_ready += gpu.gpu_not_ready || 0;
-      } else {
-        gpuSummary[gpuName] = {
-          gpu_name: gpuName,
-          gpu_total: gpu.gpu_total || 0,
-          gpu_free: gpu.gpu_free || 0,
-          gpu_not_ready: gpu.gpu_not_ready || 0,
-        };
-      }
-    });
-    setAllGPUs(Object.values(gpuSummary));
-  }, [perContextGPUs]);
-
   // Effect for initial load.
   useEffect(() => {
     // This calls the fetchData version defined when isInitialLoad is true.
@@ -2649,17 +2691,6 @@ export function GPUs() {
     };
   }, [handleRefresh]);
 
-  // Calculate summary data
-  const totalGpuTypes = (allGPUs || []).length;
-  const grandTotalGPUs = (allGPUs || []).reduce(
-    (sum, gpu) => sum + gpu.gpu_total,
-    0
-  );
-  const grandTotalFreeGPUs = (allGPUs || []).reduce(
-    (sum, gpu) => sum + gpu.gpu_free,
-    0
-  );
-
   // Group perContextGPUs by context (already flattened from the backend)
   const groupedPerContextGPUs = React.useMemo(() => {
     if (!perContextGPUs) return {};
@@ -2778,36 +2809,15 @@ export function GPUs() {
     return filterContextsByWorkspace(contexts);
   }, [allKubeContextNames, filterContextsByWorkspace]);
 
-  // Filter GPUs by context type (SSH vs Kubernetes)
-  const sshGPUs = React.useMemo(() => {
-    if (!perContextGPUs || !allGPUs) return [];
+  const sshGPUs = React.useMemo(
+    () => aggregateGPUsForContexts(perContextGPUs, sshContexts),
+    [perContextGPUs, sshContexts]
+  );
 
-    // Create a map of GPU names from SSH contexts
-    const sshGpuNames = new Set();
-    perContextGPUs.forEach((gpu) => {
-      if (gpu.context.startsWith('ssh-')) {
-        sshGpuNames.add(canonicalizeGpuName(gpu.gpu_name));
-      }
-    });
-
-    // Filter allGPUs based on whether they appear in SSH contexts
-    return allGPUs.filter((gpu) => sshGpuNames.has(gpu.gpu_name));
-  }, [allGPUs, perContextGPUs]);
-
-  const kubeGPUs = React.useMemo(() => {
-    if (!perContextGPUs || !allGPUs) return [];
-
-    // Create a map of GPU names from Kubernetes contexts
-    const kubeGpuNames = new Set();
-    perContextGPUs.forEach((gpu) => {
-      if (!gpu.context.startsWith('ssh-')) {
-        kubeGpuNames.add(canonicalizeGpuName(gpu.gpu_name));
-      }
-    });
-
-    // Filter allGPUs based on whether they appear in Kubernetes contexts
-    return allGPUs.filter((gpu) => kubeGpuNames.has(gpu.gpu_name));
-  }, [allGPUs, perContextGPUs]);
+  const kubeGPUs = React.useMemo(
+    () => aggregateGPUsForContexts(perContextGPUs, kubeContexts),
+    [perContextGPUs, kubeContexts]
+  );
 
   // Extract Slurm cluster names from perClusterSlurmGPUs
   const slurmClusters = React.useMemo(() => {
@@ -3280,6 +3290,7 @@ export function GPUs() {
       const kubeHasActivity = kubeContexts.length > 0;
       sections.push({
         name: 'Kubernetes',
+        gpus: kubeGPUs,
         render: renderKubernetesInfrastructure,
         hasActivity: kubeHasActivity,
         priority: 1, // Kubernetes gets priority 1 within same activity level
@@ -3289,6 +3300,7 @@ export function GPUs() {
       const slurmHasActivity = slurmClusters.length > 0;
       sections.push({
         name: 'Slurm',
+        gpus: allSlurmGPUs,
         render: renderSlurmInfrastructure,
         hasActivity: slurmHasActivity,
         priority: 2, // Slurm gets priority 2 within same activity level
@@ -3309,11 +3321,18 @@ export function GPUs() {
       const sshHasActivity = sshContexts.length > 0;
       sections.push({
         name: 'SSH Node Pool',
+        gpus: sshGPUs,
         render: renderSSHNodePoolInfrastructure,
         hasActivity: sshHasActivity,
         priority: 4, // SSH gets priority 4 within same activity level
       });
     }
+
+    // Sum the same inventory shown by each section; cloud sections currently
+    // expose cluster/job counts only, so they contribute no GPU inventory.
+    const totalGPUs = aggregateGPUsForContexts(
+      sections.flatMap((section) => section.gpus || [])
+    );
 
     // Dynamic sorting: enabled/active sections move to front automatically
     // This re-sorts every render as data becomes available
@@ -3328,6 +3347,14 @@ export function GPUs() {
 
     return (
       <>
+        {totalGPUs.length > 0 && (
+          <div className="bg-white rounded-lg border p-5 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Total</h2>
+            </div>
+            <GpuTypeSummaryStrip gpus={totalGPUs} />
+          </div>
+        )}
         {sortedSections.map((section, index) => (
           <React.Fragment key={index}>{section.render()}</React.Fragment>
         ))}
