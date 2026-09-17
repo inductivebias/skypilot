@@ -14,6 +14,7 @@ jest.mock('@/plugins/PluginSlot', () => ({
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import {
+  aggregateGPUsForContexts,
   InfrastructureSection,
   slurmRequestableCounts,
 } from '@/components/infra';
@@ -48,6 +49,99 @@ const cellTexts = (row) =>
 
 const expandPartitions = () =>
   fireEvent.click(screen.getAllByTitle('Show partitions')[0]);
+
+describe('aggregateGPUsForContexts', () => {
+  const gpus = [
+    {
+      context: 'ssh-lambda',
+      gpu_name: 'NVIDIA H100',
+      gpu_total: 20,
+      gpu_free: 4,
+      gpu_not_ready: 1,
+    },
+    {
+      context: 'gke-west',
+      gpu_name: 'H100',
+      gpu_total: 48,
+      gpu_free: 8,
+      gpu_not_ready: 2,
+    },
+    {
+      context: 'gke-east',
+      gpu_name: 'H100',
+      gpu_total: 8,
+      gpu_free: 3,
+      gpu_not_ready: 0,
+    },
+    {
+      context: 'gke-west',
+      gpu_name: 'A100',
+      gpu_total: 4,
+      gpu_free: 4,
+      gpu_not_ready: 0,
+    },
+  ];
+
+  it('keeps overlapping GPU types separate across context sets', () => {
+    expect(aggregateGPUsForContexts(gpus, ['ssh-lambda'])).toEqual([
+      {
+        gpu_name: 'H100',
+        gpu_total: 20,
+        gpu_free: 4,
+        gpu_not_ready: 1,
+      },
+    ]);
+    expect(aggregateGPUsForContexts(gpus, ['gke-west', 'gke-east'])).toEqual([
+      {
+        gpu_name: 'H100',
+        gpu_total: 56,
+        gpu_free: 11,
+        gpu_not_ready: 2,
+      },
+      {
+        gpu_name: 'A100',
+        gpu_total: 4,
+        gpu_free: 4,
+        gpu_not_ready: 0,
+      },
+    ]);
+  });
+
+  it('combines section summaries including Slurm without requiring contexts', () => {
+    const sections = [
+      { gpus: aggregateGPUsForContexts(gpus, ['ssh-lambda']) },
+      { gpus: aggregateGPUsForContexts(gpus, ['gke-west']) },
+      { gpus: [{ gpu_name: 'NVIDIA H100', gpu_total: 8, gpu_free: 2 }] },
+      {}, // Cloud currently has no GPU inventory.
+    ];
+    expect(
+      aggregateGPUsForContexts(
+        sections.flatMap((section) => section.gpus || [])
+      )
+    ).toEqual([
+      { gpu_name: 'H100', gpu_total: 76, gpu_free: 14, gpu_not_ready: 3 },
+      { gpu_name: 'A100', gpu_total: 4, gpu_free: 4, gpu_not_ready: 0 },
+    ]);
+    expect(aggregateGPUsForContexts([])).toEqual([]);
+  });
+
+  it('excludes contexts removed by workspace filtering', () => {
+    expect(aggregateGPUsForContexts(gpus, ['gke-west'])).toEqual([
+      {
+        gpu_name: 'H100',
+        gpu_total: 48,
+        gpu_free: 8,
+        gpu_not_ready: 2,
+      },
+      {
+        gpu_name: 'A100',
+        gpu_total: 4,
+        gpu_free: 4,
+        gpu_not_ready: 0,
+      },
+    ]);
+  });
+});
 
 describe('InfrastructureSection Slurm partition rows', () => {
   const slurmNode = (nodeName, partition, gpuName, total, free) => ({
