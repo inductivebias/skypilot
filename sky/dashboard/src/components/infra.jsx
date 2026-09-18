@@ -98,6 +98,7 @@ import {
 // Set the refresh interval to align with other pages
 const REFRESH_INTERVAL = REFRESH_INTERVALS.REFRESH_INTERVAL;
 const INFRA_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const NODE_JOB_HISTORY_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
 const INFRA_PAGE_SIZE_STORAGE_KEY = 'skypilot-infra-page-size';
 const NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY =
   'skypilot-infra-node-job-history-page-size';
@@ -530,7 +531,7 @@ export const NodeJobHistory = ({
   jobs,
   isLoading = false,
   historyPage = 1,
-  historyPageSize = 10,
+  historyPageSize = 5,
   historyTotal = null,
   onHistoryPageChange = () => {},
   onHistoryPageSizeChange = () => {},
@@ -636,7 +637,7 @@ export const NodeJobHistory = ({
             isNextDisabled={currentPage >= totalPages}
             pageSize={historyPageSize}
             onPageSizeChange={onHistoryPageSizeChange}
-            pageSizeOptions={INFRA_PAGE_SIZE_OPTIONS}
+            pageSizeOptions={NODE_JOB_HISTORY_PAGE_SIZE_OPTIONS}
             itemLabel="History jobs"
           />
         </div>
@@ -1227,7 +1228,7 @@ export function ContextDetails({
   jobs = [],
   isJobHistoryLoading = false,
   jobHistoryPage = 1,
-  jobHistoryPageSize = 10,
+  jobHistoryPageSize = 5,
   jobHistoryTotal = null,
   onJobHistoryPageChange = () => {},
   onJobHistoryPageSizeChange = () => {},
@@ -2701,8 +2702,8 @@ export function GPUs() {
   const [jobHistoryPageSize, setJobHistoryPageSize] = useState(() =>
     getPersistedPageSize(
       NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY,
-      INFRA_PAGE_SIZE_OPTIONS,
-      10
+      NODE_JOB_HISTORY_PAGE_SIZE_OPTIONS,
+      5
     )
   );
   const [jobHistoryTotal, setJobHistoryTotal] = useState(null);
@@ -2837,7 +2838,14 @@ export function GPUs() {
             })
           : Promise.resolve();
 
-        // Fetch all data in parallel (including sky check)
+        // Start job history in the background so it does not delay node and
+        // capacity rendering. Current and historical jobs remain parallel
+        // within fetchJobHistoryData.
+        if (selectedContext) {
+          void fetchJobHistoryData(forceRefresh, showLoadingIndicators);
+        }
+
+        // Fetch all primary page data in parallel (including sky check)
         // SSH Node Pools are fetched independently - they don't depend on Kubernetes data.
         // The SSH GPU info comes from getWorkspaceInfrastructure() which handles both K8s and SSH contexts.
         await Promise.all([
@@ -2846,9 +2854,6 @@ export function GPUs() {
           fetchSSHNodePools(forceRefresh),
           fetchCloudData(forceRefresh),
           fetchManagedJobsData(),
-          selectedContext
-            ? fetchJobHistoryData(forceRefresh, showLoadingIndicators)
-            : Promise.resolve(),
           fetchClusterStatsData(),
           fetchSlurmData(),
         ]);

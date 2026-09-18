@@ -326,10 +326,10 @@ describe('node job history', () => {
     expect(screen.getByText('g-autoscaled-away')).toBeInTheDocument();
     expect(screen.getByText('removed')).toBeInTheDocument();
     expect(screen.getByText('History jobs per page:')).toBeInTheDocument();
-    expect(screen.getByRole('combobox')).toHaveValue('10');
+    expect(screen.getByRole('combobox')).toHaveValue('5');
     expect(
       screen.getByRole('combobox').querySelectorAll('option')
-    ).toHaveLength(4);
+    ).toHaveLength(5);
     expect(screen.queryByText('other-context')).not.toBeInTheDocument();
   });
 
