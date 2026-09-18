@@ -360,6 +360,36 @@ class TestGetJobTable:
         assert 'ws1' in workspaces
         assert 'ws2' in workspaces
 
+    def test_get_job_table_transports_node_lineage_and_filters(self):
+        finished_job_id = self.job_ids['job_id4']
+        state.set_job_infra(finished_job_id,
+                            cloud='Kubernetes',
+                            region='test-context',
+                            current_node_names=['node-old'])
+        state.set_job_infra(finished_job_id,
+                            current_node_names=['node-current'])
+        request = managed_jobsv1_pb2.GetJobTableRequest(
+            accessible_workspaces=managed_jobsv1_pb2.Workspaces(
+                workspaces=['ws1', 'ws2']),
+            cloud='Kubernetes',
+            region='test-context',
+            require_node_names=True,
+            finished_only=True,
+            page=1,
+            limit=10,
+            fields=managed_jobsv1_pb2.Fields(
+                fields=['job_id', 'node_name_lineage']))
+        context_mock = mock.Mock()
+
+        response = self.service.GetJobTable(request, context_mock)
+
+        context_mock.abort.assert_not_called()
+        assert response.total == 1
+        assert len(response.jobs) == 1
+        assert response.jobs[0].job_id == finished_job_id
+        assert response.jobs[0].node_name_lineage == (
+            '[["node-old", "node-current"]]')
+
     def test_get_job_table_no_accessible_workspaces(self):
         """Test basic GetJobTable functionality without specified accessible
          workspaces - should return all jobs."""

@@ -2706,6 +2706,7 @@ export function GPUs() {
     )
   );
   const [jobHistoryTotal, setJobHistoryTotal] = useState(null);
+  const jobHistoryRequestIdRef = React.useRef(0);
   const [clusterDataLoading, setClusterDataLoading] = useState(true);
   const [lastFetchedTime, setLastFetchedTime] = useState(null);
 
@@ -2727,6 +2728,7 @@ export function GPUs() {
   const fetchJobHistoryData = React.useCallback(
     async (forceRefresh = false, showLoadingIndicator = true) => {
       if (!selectedContext) return;
+      const requestId = ++jobHistoryRequestIdRef.current;
       try {
         if (showLoadingIndicator) setJobHistoryLoading(true);
         const isSSH = selectedContext.startsWith('ssh-');
@@ -2755,18 +2757,33 @@ export function GPUs() {
           forceRefresh
             ? getManagedJobs(options)
             : dashboardCache.get(getManagedJobs, [options]);
-        const [currentData, historyData] = await Promise.all([
-          fetchJobs(currentOptions),
-          fetchJobs(historyOptions),
-        ]);
+        const fetchLegacyHistory = async () => {
+          const legacyData = await fetchJobs(LEGACY_JOB_HISTORY_OPTIONS);
+          if (requestId !== jobHistoryRequestIdRef.current) return;
+          setJobHistory(legacyData?.jobs || []);
+          setJobHistoryTotal(null);
+        };
+        let currentData;
+        let historyData;
+        try {
+          [currentData, historyData] = await Promise.all([
+            fetchJobs(currentOptions),
+            fetchJobs(historyOptions),
+          ]);
+        } catch (error) {
+          // An updated API server can still be connected to an older jobs
+          // controller or runner that does not support node-history filters.
+          await fetchLegacyHistory();
+          return;
+        }
+
+        if (requestId !== jobHistoryRequestIdRef.current) return;
 
         // API servers before v57 ignore the infrastructure/history filters.
         // Keep those deployments usable while limiting the unbounded fallback
         // to the compatibility path only.
         if (!historyData?.apiVersion || historyData.apiVersion < 57) {
-          const legacyData = await fetchJobs(LEGACY_JOB_HISTORY_OPTIONS);
-          setJobHistory(legacyData?.jobs || []);
-          setJobHistoryTotal(null);
+          await fetchLegacyHistory();
         } else {
           setJobHistory([
             ...(currentData?.jobs || []),
@@ -2775,11 +2792,17 @@ export function GPUs() {
           setJobHistoryTotal(historyData?.total || 0);
         }
       } catch (error) {
+        if (requestId !== jobHistoryRequestIdRef.current) return;
         console.error('Error fetching node job history:', error);
         setJobHistory([]);
         setJobHistoryTotal(0);
       } finally {
-        if (showLoadingIndicator) setJobHistoryLoading(false);
+        if (
+          requestId === jobHistoryRequestIdRef.current &&
+          showLoadingIndicator
+        ) {
+          setJobHistoryLoading(false);
+        }
       }
     },
     [jobHistoryPage, jobHistoryPageSize, selectedContext]
@@ -2891,6 +2914,7 @@ export function GPUs() {
   );
 
   useEffect(() => {
+    jobHistoryRequestIdRef.current += 1;
     if (selectedContext) {
       setJobHistoryPage(1);
     } else {
@@ -3297,10 +3321,7 @@ export function GPUs() {
     trackInfraAction('refresh');
     // Invalidate cache to ensure fresh data is fetched
     dashboardCache.invalidate(getClusters);
-    dashboardCache.invalidate(getManagedJobs, [
-      { allUsers: true, skipFinished: true },
-    ]);
-    dashboardCache.invalidate(getManagedJobs, [LEGACY_JOB_HISTORY_OPTIONS]);
+    dashboardCache.invalidateFunction(getManagedJobs);
     dashboardCache.invalidate(getWorkspaceContexts);
     dashboardCache.invalidate(getWorkspaceInfrastructure); // Keep for backwards compatibility
     dashboardCache.invalidate(getEnabledCloudsList);

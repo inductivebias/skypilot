@@ -3517,6 +3517,10 @@ class ManagedJobCodeGen:
         _BATCH_FIELDS = {{'is_batch', 'batch_total_batches', 'batch_completed_batches'}}
         if managed_job_version < 18 and _fields is not None:
             _fields = [f for f in _fields if f not in _BATCH_FIELDS]
+        if managed_job_version < 23 and {bool(cloud is not None or region is not None or require_node_names or finished_only)!r}:
+            raise RuntimeError(
+                'Infrastructure node history requires managed jobs controller '
+                'version 23 or newer.')
         if managed_job_version < 9:
             # For backward compatibility, since filtering is not supported
             # before #6652.

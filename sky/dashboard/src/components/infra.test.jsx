@@ -315,4 +315,21 @@ describe('node job history', () => {
     ).toHaveLength(4);
     expect(screen.queryByText('other-context')).not.toBeInTheDocument();
   });
+
+  it('uses the server total for history pagination', () => {
+    render(
+      <NodeJobHistory
+        contextName={context}
+        nodes={nodes}
+        jobs={jobs}
+        historyPage={2}
+        historyPageSize={10}
+        historyTotal={21}
+      />
+    );
+
+    expect(screen.getByText('11 – 20 of 21')).toBeInTheDocument();
+    expect(screen.getByText('training-current')).toBeInTheDocument();
+    expect(screen.getAllByText('training-finished')).toHaveLength(2);
+  });
 });
