@@ -2707,8 +2707,7 @@ export function GPUs() {
     )
   );
   const [jobHistoryTotal, setJobHistoryTotal] = useState(null);
-  const [jobHistoryPaginationMode, setJobHistoryPaginationMode] =
-    useState(null);
+  const jobHistoryPaginationModeRef = React.useRef(null);
   const jobHistoryRequestIdRef = React.useRef(0);
   const [clusterDataLoading, setClusterDataLoading] = useState(true);
   const [lastFetchedTime, setLastFetchedTime] = useState(null);
@@ -2765,9 +2764,9 @@ export function GPUs() {
           if (requestId !== jobHistoryRequestIdRef.current) return;
           setJobHistory(legacyData?.jobs || []);
           setJobHistoryTotal(null);
-          setJobHistoryPaginationMode('client');
+          jobHistoryPaginationModeRef.current = 'client';
         };
-        if (jobHistoryPaginationMode === 'client') {
+        if (jobHistoryPaginationModeRef.current === 'client') {
           await fetchLegacyHistory();
           return;
         }
@@ -2798,7 +2797,7 @@ export function GPUs() {
             ...(historyData?.jobs || []),
           ]);
           setJobHistoryTotal(historyData?.total || 0);
-          setJobHistoryPaginationMode('server');
+          jobHistoryPaginationModeRef.current = 'server';
         }
       } catch (error) {
         if (requestId !== jobHistoryRequestIdRef.current) return;
@@ -2814,12 +2813,7 @@ export function GPUs() {
         }
       }
     },
-    [
-      jobHistoryPage,
-      jobHistoryPageSize,
-      jobHistoryPaginationMode,
-      selectedContext,
-    ]
+    [jobHistoryPage, jobHistoryPageSize, selectedContext]
   );
 
   const fetchData = React.useCallback(
@@ -2933,11 +2927,11 @@ export function GPUs() {
 
   useEffect(() => {
     jobHistoryRequestIdRef.current += 1;
+    setJobHistoryLoading(false);
     if (selectedContext) {
       setJobHistoryPage(1);
     } else {
       setJobHistory([]);
-      setJobHistoryLoading(false);
     }
     // Page changes are fetched by the separate effect below; resetting the
     // page here is only tied to navigation between infrastructure contexts.
@@ -2945,10 +2939,10 @@ export function GPUs() {
   }, [selectedContext]);
 
   useEffect(() => {
-    if (selectedContext && jobHistoryPaginationMode !== 'client') {
+    if (selectedContext && jobHistoryPaginationModeRef.current !== 'client') {
       fetchJobHistoryData();
     }
-  }, [fetchJobHistoryData, jobHistoryPaginationMode, selectedContext]);
+  }, [fetchJobHistoryData, selectedContext]);
 
   const handleJobHistoryPageSizeChange = React.useCallback((event) => {
     const nextPageSize = Number(event.target.value);
