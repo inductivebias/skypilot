@@ -101,7 +101,7 @@ const INFRA_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const NODE_JOB_HISTORY_PAGE_SIZE_OPTIONS = [5, 10, 25, 50, 100];
 const INFRA_PAGE_SIZE_STORAGE_KEY = 'skypilot-infra-page-size';
 const NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY =
-  'skypilot-infra-node-job-history-page-size';
+  'skypilot-infra-node-job-history-page-size-v2';
 const JOB_NODE_FIELDS = [
   'job_id',
   'job_name',
@@ -2707,6 +2707,8 @@ export function GPUs() {
     )
   );
   const [jobHistoryTotal, setJobHistoryTotal] = useState(null);
+  const [jobHistoryPaginationMode, setJobHistoryPaginationMode] =
+    useState(null);
   const jobHistoryRequestIdRef = React.useRef(0);
   const [clusterDataLoading, setClusterDataLoading] = useState(true);
   const [lastFetchedTime, setLastFetchedTime] = useState(null);
@@ -2763,7 +2765,12 @@ export function GPUs() {
           if (requestId !== jobHistoryRequestIdRef.current) return;
           setJobHistory(legacyData?.jobs || []);
           setJobHistoryTotal(null);
+          setJobHistoryPaginationMode('client');
         };
+        if (jobHistoryPaginationMode === 'client') {
+          await fetchLegacyHistory();
+          return;
+        }
         let currentData;
         let historyData;
         try {
@@ -2791,6 +2798,7 @@ export function GPUs() {
             ...(historyData?.jobs || []),
           ]);
           setJobHistoryTotal(historyData?.total || 0);
+          setJobHistoryPaginationMode('server');
         }
       } catch (error) {
         if (requestId !== jobHistoryRequestIdRef.current) return;
@@ -2806,7 +2814,12 @@ export function GPUs() {
         }
       }
     },
-    [jobHistoryPage, jobHistoryPageSize, selectedContext]
+    [
+      jobHistoryPage,
+      jobHistoryPageSize,
+      jobHistoryPaginationMode,
+      selectedContext,
+    ]
   );
 
   const fetchData = React.useCallback(
@@ -2932,8 +2945,10 @@ export function GPUs() {
   }, [selectedContext]);
 
   useEffect(() => {
-    if (selectedContext) fetchJobHistoryData();
-  }, [fetchJobHistoryData, selectedContext]);
+    if (selectedContext && jobHistoryPaginationMode !== 'client') {
+      fetchJobHistoryData();
+    }
+  }, [fetchJobHistoryData, jobHistoryPaginationMode, selectedContext]);
 
   const handleJobHistoryPageSizeChange = React.useCallback((event) => {
     const nextPageSize = Number(event.target.value);
