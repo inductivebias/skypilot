@@ -65,6 +65,7 @@ import { checkGrafanaAvailability } from '@/utils/grafana';
 import { normalizeUrl, useLogLinkExtractor } from '@/utils/externalLinks';
 import { TelemetrySection } from '@/components/TelemetrySection';
 import { hasAccelerator } from '@/utils/gpuUtils';
+import { getInfraContextHref } from '@/utils/infraUtils';
 import { useLogStreamer } from '@/hooks/useLogStreamer';
 import PropTypes from 'prop-types';
 
@@ -957,6 +958,7 @@ function JobDetailsContent({
   selectedNode = 'all',
   onNodesExtracted = null,
 }) {
+  const infraHref = getInfraContextHref(jobData.cloud, jobData.region);
   const [isYamlExpanded, setIsYamlExpanded] = useState(false);
   const [expandedYamlDocs, setExpandedYamlDocs] = useState({});
   const [showFullYaml, setShowFullYaml] = useState(false);
@@ -1438,9 +1440,18 @@ function JobDetailsContent({
               className="text-sm text-muted-foreground"
             >
               <span>
-                <Link href="/infra" className="text-blue-600 hover:underline">
-                  {jobData.cloud || jobData.infra.split('(')[0].trim()}
-                </Link>
+                {infraHref ? (
+                  <Link
+                    href={infraHref}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {jobData.cloud || jobData.infra.split('(')[0].trim()}
+                  </Link>
+                ) : (
+                  <span>
+                    {jobData.cloud || jobData.infra.split('(')[0].trim()}
+                  </span>
+                )}
                 {jobData.infra.includes('(') && (
                   <span>
                     {' ' + jobData.infra.substring(jobData.infra.indexOf('('))}
@@ -1799,6 +1810,7 @@ JobDetailsContent.propTypes = {
     infra: PropTypes.string,
     full_infra: PropTypes.string,
     cloud: PropTypes.string,
+    region: PropTypes.string,
     resources_str_full: PropTypes.string,
     resources_str: PropTypes.string,
     git_commit: PropTypes.string,

@@ -7,6 +7,23 @@ import {
   NodeJobHistory,
   paginateNodeJobRows,
 } from '@/components/infra';
+import { getInfraContextHref } from '@/utils/infraUtils';
+
+describe('getInfraContextHref', () => {
+  it('links only infrastructure with a context detail page', () => {
+    expect(getInfraContextHref('Kubernetes', 'cks-use06a')).toBe(
+      '/infra/cks-use06a'
+    );
+    expect(getInfraContextHref('SSH', 'deploy-lambda-1')).toBe(
+      '/infra/ssh-deploy-lambda-1'
+    );
+    expect(getInfraContextHref('Slurm', 'training/partition')).toBe(
+      '/infra/training%2Fpartition'
+    );
+    expect(getInfraContextHref('AWS', 'us-east-1')).toBeNull();
+    expect(getInfraContextHref('Kubernetes', null)).toBeNull();
+  });
+});
 
 describe('aggregateGPUsForContexts', () => {
   const gpus = [

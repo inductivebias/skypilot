@@ -31,6 +31,7 @@ import { useLogStreamer } from '@/hooks/useLogStreamer';
 import { checkGrafanaAvailability } from '@/utils/grafana';
 import { TelemetrySection } from '@/components/TelemetrySection';
 import { hasAccelerator } from '@/utils/gpuUtils';
+import { getInfraContextHref } from '@/utils/infraUtils';
 import { trackJobAction } from '@/lib/analytics';
 
 function TaskDetails() {
@@ -284,6 +285,8 @@ function TaskDetails() {
 }
 
 function TaskDetailsContent({ taskData, taskIndex, poolsData }) {
+  const infraHref = getInfraContextHref(taskData.cloud, taskData.region);
+
   return (
     <div className="grid grid-cols-2 gap-6">
       <div>
@@ -353,9 +356,18 @@ function TaskDetailsContent({ taskData, taskIndex, poolsData }) {
               className="text-sm text-muted-foreground"
             >
               <span>
-                <Link href="/infra" className="text-blue-600 hover:underline">
-                  {taskData.cloud || taskData.infra.split('(')[0].trim()}
-                </Link>
+                {infraHref ? (
+                  <Link
+                    href={infraHref}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {taskData.cloud || taskData.infra.split('(')[0].trim()}
+                  </Link>
+                ) : (
+                  <span>
+                    {taskData.cloud || taskData.infra.split('(')[0].trim()}
+                  </span>
+                )}
                 {taskData.infra.includes('(') && (
                   <span>
                     {' ' +

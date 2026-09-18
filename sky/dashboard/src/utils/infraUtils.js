@@ -62,3 +62,25 @@ export function buildContextStatsKeyFromCloud(cloud, region) {
   }
   return buildContextStatsKey(region, { cloud });
 }
+
+/**
+ * Returns the detail-page URL for infrastructure with a stable context.
+ * Cloud VMs have no context detail page and intentionally return null.
+ */
+export function getInfraContextHref(cloud, region) {
+  if (!cloud || !region || region === '-') {
+    return null;
+  }
+
+  const normalizedCloud = cloud.toLowerCase();
+  let context;
+  if (normalizedCloud === 'ssh') {
+    context = region.startsWith('ssh-') ? region : `ssh-${region}`;
+  } else if (normalizedCloud === 'kubernetes' || normalizedCloud === 'slurm') {
+    context = region;
+  } else {
+    return null;
+  }
+
+  return `/infra/${encodeURIComponent(context)}`;
+}
