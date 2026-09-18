@@ -254,6 +254,10 @@ class TestQueue:
                                workspace_match,
                                name_match,
                                pool_match,
+                               cloud,
+                               region,
+                               require_node_names,
+                               finished_only,
                                page,
                                limit,
                                user_hashes,
@@ -271,6 +275,10 @@ class TestQueue:
                 'workspace_match': workspace_match,
                 'name_match': name_match,
                 'pool_match': pool_match,
+                'cloud': cloud,
+                'region': region,
+                'require_node_names': require_node_names,
+                'finished_only': finished_only,
                 'page': page,
                 'limit': limit,
                 'user_hashes': user_hashes,
@@ -652,6 +660,129 @@ class TestQueue:
         assert sorted([j['job_id'] for j in filtered]) == [2, 3]
         assert total_no_filter == 3
 
+    def test_queue_without_node_filters_supports_legacy_runner(
+            self, monkeypatch):
+        jobs = [_make_job(1)]
+        self._patch_backend_and_utils(monkeypatch, jobs)
+
+        class LegacyRunner:
+
+            def fetch_managed_job_table(
+                self,
+                *,
+                handle,
+                backend,
+                skip_finished,
+                accessible_workspaces,
+                job_ids,
+                workspace_match,
+                name_match,
+                pool_match,
+                page,
+                limit,
+                user_hashes,
+                statuses,
+                fields,
+                sort_by,
+                sort_order,
+                submitted_after,
+                submitted_before,
+            ):
+                del (handle, backend, skip_finished, accessible_workspaces,
+                     job_ids, workspace_match, name_match, pool_match, page,
+                     limit, user_hashes, statuses, fields, sort_by, sort_order,
+                     submitted_after, submitted_before)
+                return (jobs, 1, jobs_utils.ManagedJobQueueResultType.DICT, 1, {
+                    'PENDING': 1
+                })
+
+        monkeypatch.setattr(jobs_core.managed_job_runner, 'current',
+                            lambda: LegacyRunner())
+
+        filtered, total, status_counts, total_no_filter = jobs_core.queue_v2(
+            refresh=False, all_users=True)
+
+        assert filtered == jobs
+        assert total == 1
+        assert status_counts == {'PENDING': 1}
+        assert total_no_filter == 1
+
+    def test_queue_node_filters_bypass_old_grpc_service(self, monkeypatch):
+
+        class DummyCloudVmRayBackend:
+            pass
+
+        class DummyHandle:
+
+            @property
+            def is_grpc_enabled_with_flag(self):
+                return True
+
+            def get_grpc_channel(self):
+                return None
+
+        class OldSkyletClient:
+
+            def __init__(self, channel):
+                del channel
+
+            def get_managed_job_controller_version(self, request):
+                del request
+                return type('VersionResponse', (),
+                            {'controller_version': '38'})()
+
+            def get_managed_job_table(self, request):
+                del request
+                raise AssertionError(
+                    'old gRPC service must not receive filters')
+
+        class FilterAwareRunner:
+
+            def fetch_managed_job_table(self, **kwargs):
+                assert kwargs['cloud'] == 'Kubernetes'
+                assert kwargs['region'] == 'test-context'
+                assert kwargs['require_node_names'] is True
+                assert kwargs['finished_only'] is True
+                return ([], 0, jobs_utils.ManagedJobQueueResultType.DICT, 0, {})
+
+        class FakeManagedJobsProto:
+
+            class GetVersionRequest:
+                pass
+
+        monkeypatch.setattr(jobs_core.backends, 'CloudVmRayBackend',
+                            DummyCloudVmRayBackend)
+        monkeypatch.setattr(jobs_core, '_maybe_restart_controller',
+                            lambda *args, **kwargs: DummyHandle())
+        monkeypatch.setattr(jobs_core.backend_utils, 'get_backend_from_handle',
+                            lambda handle: DummyCloudVmRayBackend())
+        monkeypatch.setattr(jobs_core.backend_utils,
+                            'invoke_skylet_with_retries',
+                            lambda operation: operation())
+        monkeypatch.setattr(jobs_core.cloud_vm_ray_backend, 'SkyletClient',
+                            OldSkyletClient)
+        monkeypatch.setattr(jobs_core, 'managed_jobsv1_pb2',
+                            FakeManagedJobsProto)
+        monkeypatch.setattr(jobs_core.workspaces_core,
+                            'get_accessible_workspace_names', lambda: set())
+        monkeypatch.setattr(jobs_core.managed_job_runner, 'current',
+                            lambda: FilterAwareRunner())
+
+        jobs, total, status_counts, total_no_filter = jobs_core.queue_v2(
+            refresh=False,
+            all_users=True,
+            cloud='Kubernetes',
+            region='test-context',
+            require_node_names=True,
+            finished_only=True,
+            page=1,
+            limit=10)
+
+        assert jobs == []
+        assert total == 0
+        assert status_counts == {}
+        assert total_no_filter == 0
+
 
 class TestDumpManagedJobQueue:
 
@@ -707,9 +838,13 @@ class TestDumpManagedJobQueue:
                                                workspace_match,
                                                name_match,
                                                pool_match,
+                                               cloud,
+                                               region,
+                                               require_node_names,
                                                user_hashes,
                                                statuses,
                                                skip_finished,
+                                               finished_only,
                                                page,
                                                limit,
                                                sort_by=None,
@@ -738,8 +873,12 @@ class TestDumpManagedJobQueue:
                                                workspace_match,
                                                name_match,
                                                pool_match,
+                                               cloud,
+                                               region,
+                                               require_node_names,
                                                user_hashes,
                                                skip_finished,
+                                               finished_only,
                                                submitted_after=None,
                                                submitted_before=None,
                                                status_expr=None):

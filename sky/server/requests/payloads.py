@@ -636,6 +636,10 @@ class JobsQueueV2Body(RequestBody):
     workspace_match: Optional[str] = None
     name_match: Optional[str] = None
     pool_match: Optional[str] = None
+    cloud: Optional[str] = None
+    region: Optional[str] = None
+    require_node_names: bool = False
+    finished_only: bool = False
     page: Optional[int] = None
     limit: Optional[int] = None
     statuses: Optional[List[str]] = None

@@ -727,6 +727,39 @@ class TestGetManagedJobsWithFilters:
         for job in jobs:
             assert not job['status'].is_terminal()
 
+    def test_finished_only_excludes_partially_finished_pipeline(
+            self, _seed_multi_task_job):
+        jobs, total = state.get_managed_jobs_with_filters(finished_only=True)
+
+        assert total == 1
+        assert {job['job_id'] for job in jobs
+               } == {_seed_multi_task_job['failed_job_id']}
+
+    def test_infrastructure_filters_require_persisted_node_names(
+            self, _seed_test_jobs):
+        current_job_id = _seed_test_jobs['job_id3']
+        finished_job_id = _seed_test_jobs['job_id4']
+        state.set_job_infra(current_job_id,
+                            cloud='Kubernetes',
+                            region='cks-use06a',
+                            current_node_names=['node-old'])
+        state.set_job_infra(current_job_id, current_node_names=['node-current'])
+        state.set_job_infra(finished_job_id,
+                            cloud='Kubernetes',
+                            region='other-context',
+                            current_node_names=['other-node'])
+
+        jobs, total = state.get_managed_jobs_with_filters(
+            cloud='Kubernetes',
+            region='cks-use06a',
+            require_node_names=True,
+            fields=['job_id', 'node_name_lineage'])
+
+        assert total == 1
+        assert jobs[0]['job_id'] == current_job_id
+        assert jobs[0]['node_name_lineage'] == (
+            '[["node-old", "node-current"]]')
+
     def test_with_pagination(self, _seed_test_jobs):
         """Test pagination with page and limit."""
         # Get first page with limit 2

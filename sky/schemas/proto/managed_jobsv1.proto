@@ -95,6 +95,11 @@ message GetJobTableRequest {
   // ManagedJobsService v22.
   optional double submitted_after = 15;
   optional double submitted_before = 16;
+  // Infrastructure/node-history filters, added in ManagedJobsService v23.
+  optional string cloud = 17;
+  optional string region = 18;
+  bool require_node_names = 19;
+  bool finished_only = 20;
 }
 
 message ManagedJobInfo {
@@ -155,6 +160,8 @@ message ManagedJobInfo {
   optional int32 batch_total_batches = 39;
   // Batch progress: number of completed batches (NULL for non-batch jobs).
   optional int32 batch_completed_batches = 40;
+  // Raw JSON list-of-lists retaining physical names across recoveries.
+  optional string node_name_lineage = 41;
 }
 
 // A pair of internal and external IP addresses

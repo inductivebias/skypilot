@@ -495,6 +495,10 @@ class ManagedJobsServiceImpl(managed_jobsv1_pb2_grpc.ManagedJobsServiceServicer
                 if request.HasField('name_match') else None,
                 pool_match=request.pool_match
                 if request.HasField('pool_match') else None,
+                cloud=request.cloud if request.HasField('cloud') else None,
+                region=request.region if request.HasField('region') else None,
+                require_node_names=request.require_node_names,
+                finished_only=request.finished_only,
                 page=request.page if request.HasField('page') else None,
                 limit=request.limit if request.HasField('limit') else None,
                 user_hashes=user_hashes,
@@ -573,7 +577,8 @@ class ManagedJobsServiceImpl(managed_jobsv1_pb2_grpc.ManagedJobsServiceServicer
                     # Batch progress fields
                     is_batch=job.get('is_batch'),
                     batch_total_batches=job.get('batch_total_batches'),
-                    batch_completed_batches=job.get('batch_completed_batches'))
+                    batch_completed_batches=job.get('batch_completed_batches'),
+                    node_name_lineage=job.get('node_name_lineage'))
                 jobs_info.append(job_info)
 
             return managed_jobsv1_pb2.GetJobTableResponse(

@@ -237,6 +237,8 @@ class ManagedJobRecord(ResponseBaseModel):
     links: Optional[Dict[str, str]] = None
     # Node names for dashboard display (comma-separated)
     node_names: Optional[str] = None
+    # Persisted JSON list-of-lists retaining physical names across recovery.
+    node_name_lineage: Optional[str] = None
     # JobGroup fields
     # Execution mode: 'parallel' (job group) or 'serial' (pipeline/single job)
     execution: Optional[str] = None

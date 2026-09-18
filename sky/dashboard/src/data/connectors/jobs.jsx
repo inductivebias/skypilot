@@ -127,8 +127,14 @@ export async function getManagedJobs(options = {}) {
       userMatch,
       workspaceMatch,
       poolMatch,
+      cloud,
+      region,
+      requireNodeNames = false,
+      finishedOnly = false,
       page,
       limit,
+      sortBy,
+      sortOrder,
       statuses,
       fields,
       jobIDs,
@@ -143,8 +149,14 @@ export async function getManagedJobs(options = {}) {
     if (userMatch !== undefined) body.user_match = userMatch;
     if (workspaceMatch !== undefined) body.workspace_match = workspaceMatch;
     if (poolMatch !== undefined) body.pool_match = poolMatch;
+    if (cloud !== undefined) body.cloud = cloud;
+    if (region !== undefined) body.region = region;
+    if (requireNodeNames) body.require_node_names = true;
+    if (finishedOnly) body.finished_only = true;
     if (page !== undefined) body.page = page;
     if (limit !== undefined) body.limit = limit;
+    if (sortBy !== undefined) body.sort_by = sortBy;
+    if (sortOrder !== undefined) body.sort_order = sortOrder;
     if (statuses !== undefined && statuses.length > 0) body.statuses = statuses;
     // Support both jobIdMatch (from filter UI) and jobIDs (direct usage)
     const resolvedJobIDs = jobIdMatch ? [jobIdMatch] : jobIDs;
@@ -164,6 +176,7 @@ export async function getManagedJobs(options = {}) {
       throw new Error(msg);
     }
     const id = response.headers.get('X-Skypilot-Request-ID');
+    const apiVersion = Number(response.headers.get(API_VERSION_HEADER)) || null;
     // Handle empty request ID
     if (!id) {
       const msg = 'No request ID received from server for managed jobs';
@@ -311,6 +324,7 @@ export async function getManagedJobs(options = {}) {
         accelerators: job.accelerators, // Include accelerators field
         labels: job.labels || {}, // Include labels field
         node_names: job.node_names, // Node names for dashboard display
+        node_name_lineage: job.node_name_lineage,
         // JobGroup fields
         is_job_group: job.is_job_group,
         execution: job.execution,
@@ -334,6 +348,7 @@ export async function getManagedJobs(options = {}) {
       totalNoFilter,
       controllerStopped: false,
       statusCounts,
+      apiVersion,
     };
   } catch (error) {
     console.error('Error fetching managed job data:', error);

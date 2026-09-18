@@ -158,6 +158,8 @@ _NON_DB_FIELDS = _CLUSTER_HANDLE_FIELDS + [
     'details',
     # is_job_group is derived from execution column (execution == 'parallel')
     'is_job_group',
+    # Raw JSON derived from the persisted node_names column.
+    'node_name_lineage',
 ]
 
 
@@ -2314,6 +2316,10 @@ def dump_managed_job_queue(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
+    finished_only: bool = False,
     page: Optional[int] = None,
     limit: Optional[int] = None,
     user_hashes: Optional[List[Optional[str]]] = None,
@@ -2325,10 +2331,25 @@ def dump_managed_job_queue(
     submitted_before: Optional[float] = None,
 ) -> str:
     return message_utils.encode_payload(
-        get_managed_job_queue(skip_finished, accessible_workspaces, job_ids,
-                              workspace_match, name_match, pool_match, page,
-                              limit, user_hashes, statuses, fields, sort_by,
-                              sort_order, submitted_after, submitted_before))
+        get_managed_job_queue(skip_finished=skip_finished,
+                              accessible_workspaces=accessible_workspaces,
+                              job_ids=job_ids,
+                              workspace_match=workspace_match,
+                              name_match=name_match,
+                              pool_match=pool_match,
+                              cloud=cloud,
+                              region=region,
+                              require_node_names=require_node_names,
+                              finished_only=finished_only,
+                              page=page,
+                              limit=limit,
+                              user_hashes=user_hashes,
+                              statuses=statuses,
+                              fields=fields,
+                              sort_by=sort_by,
+                              sort_order=sort_order,
+                              submitted_after=submitted_after,
+                              submitted_before=submitted_before))
 
 
 def _update_fields(fields: List[str],) -> Tuple[List[str], bool]:
@@ -2382,6 +2403,8 @@ def _update_fields(fields: List[str],) -> Tuple[List[str], bool]:
     if 'is_job_group' in fields:
         if 'execution' not in new_fields:
             new_fields.append('execution')
+    if 'node_name_lineage' in fields and 'node_names' not in new_fields:
+        new_fields.append('node_names')
     if cluster_handle_required:
         if 'task_name' not in new_fields:
             new_fields.append('task_name')
@@ -2525,6 +2548,10 @@ def get_managed_job_queue(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
+    finished_only: bool = False,
     page: Optional[int] = None,
     limit: Optional[int] = None,
     user_hashes: Optional[List[Optional[str]]] = None,
@@ -2579,8 +2606,12 @@ def get_managed_job_queue(
         workspace_match=workspace_match,
         name_match=name_match,
         pool_match=pool_match,
+        cloud=cloud,
+        region=region,
+        require_node_names=require_node_names,
         user_hashes=user_hashes,
         skip_finished=skip_finished,
+        finished_only=finished_only,
         submitted_after=submitted_after,
         submitted_before=submitted_before,
         status_expr=status_expr,
@@ -2593,6 +2624,10 @@ def get_managed_job_queue(
         workspace_match=workspace_match,
         name_match=name_match,
         pool_match=pool_match,
+        cloud=cloud,
+        region=region,
+        require_node_names=require_node_names,
+        finished_only=finished_only,
         user_hashes=user_hashes,
         statuses=statuses,
         skip_finished=skip_finished,
@@ -3459,6 +3494,10 @@ class ManagedJobCodeGen:
         workspace_match: Optional[str] = None,
         name_match: Optional[str] = None,
         pool_match: Optional[str] = None,
+        cloud: Optional[str] = None,
+        region: Optional[str] = None,
+        require_node_names: bool = False,
+        finished_only: bool = False,
         page: Optional[int] = None,
         limit: Optional[int] = None,
         user_hashes: Optional[List[Optional[str]]] = None,
@@ -3478,6 +3517,10 @@ class ManagedJobCodeGen:
         _BATCH_FIELDS = {{'is_batch', 'batch_total_batches', 'batch_completed_batches'}}
         if managed_job_version < 18 and _fields is not None:
             _fields = [f for f in _fields if f not in _BATCH_FIELDS]
+        if managed_job_version < 23 and {bool(cloud is not None or region is not None or require_node_names or finished_only)!r}:
+            raise RuntimeError(
+                'Infrastructure node history requires managed jobs controller '
+                'version 23 or newer.')
         if managed_job_version < 9:
             # For backward compatibility, since filtering is not supported
             # before #6652.
@@ -3534,6 +3577,23 @@ class ManagedJobCodeGen:
                                 fields=_fields,
                                 sort_by={sort_by!r},
                                 sort_order={sort_order!r})
+        elif managed_job_version < 23:
+            job_table = utils.dump_managed_job_queue(
+                                skip_finished={skip_finished},
+                                accessible_workspaces={accessible_workspaces!r},
+                                job_ids={job_ids!r},
+                                workspace_match={workspace_match!r},
+                                name_match={name_match!r},
+                                pool_match={pool_match!r},
+                                page={page!r},
+                                limit={limit!r},
+                                user_hashes={user_hashes!r},
+                                statuses={statuses!r},
+                                fields=_fields,
+                                sort_by={sort_by!r},
+                                sort_order={sort_order!r},
+                                submitted_after={submitted_after!r},
+                                submitted_before={submitted_before!r})
         else:
             job_table = utils.dump_managed_job_queue(
                                 skip_finished={skip_finished},
@@ -3542,6 +3602,10 @@ class ManagedJobCodeGen:
                                 workspace_match={workspace_match!r},
                                 name_match={name_match!r},
                                 pool_match={pool_match!r},
+                                cloud={cloud!r},
+                                region={region!r},
+                                require_node_names={require_node_names!r},
+                                finished_only={finished_only!r},
                                 page={page!r},
                                 limit={limit!r},
                                 user_hashes={user_hashes!r},
