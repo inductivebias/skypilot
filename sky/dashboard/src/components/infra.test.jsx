@@ -174,7 +174,8 @@ describe('node job history', () => {
       status: 'SUCCEEDED',
       cloud: 'Kubernetes',
       region: context,
-      node_names: 'g123422,g-autoscaled-away',
+      node_names: 'g-autoscaled-away',
+      node_name_lineage: '[["g123422", "g-autoscaled-away"]]',
       submitted_at: new Date('2026-09-17T12:00:00Z'),
     },
     {
@@ -214,7 +215,22 @@ describe('node job history', () => {
   });
 
   it('paginates history while keeping current jobs visible', () => {
-    const rows = buildNodeJobRows(jobs, context, nodes);
+    const rows = buildNodeJobRows(
+      [
+        ...jobs,
+        {
+          id: 39,
+          name: 'older-job',
+          status: 'FAILED',
+          cloud: 'Kubernetes',
+          region: context,
+          node_names: 'gd8c0da',
+          submitted_at: new Date('2026-09-16T12:00:00Z'),
+        },
+      ],
+      context,
+      nodes
+    );
 
     const firstPage = paginateNodeJobRows(rows, 1, 1);
     expect(firstPage).toMatchObject({
@@ -224,7 +240,7 @@ describe('node job history', () => {
       startIndex: 0,
       endIndex: 1,
     });
-    expect(firstPage.rows).toHaveLength(1);
+    expect(firstPage.rows).toHaveLength(2);
     expect(firstPage.rows[0].current_jobs).toEqual([
       expect.objectContaining({ id: 42 }),
     ]);
@@ -239,10 +255,47 @@ describe('node job history', () => {
     ]);
     expect(secondPage.rows[0].job_history).toEqual([]);
     expect(secondPage.rows[1]).toMatchObject({
-      node_name: 'g-autoscaled-away',
-      is_present: false,
-      job_history: [expect.objectContaining({ id: 41 })],
+      node_name: 'gd8c0da',
+      is_present: true,
+      job_history: [expect.objectContaining({ id: 39 })],
     });
+  });
+
+  it('aggregates pipeline tasks before classifying the job', () => {
+    const pipelineTasks = [
+      {
+        id: 50,
+        name: 'pipeline',
+        status: 'SUCCEEDED',
+        cloud: 'Kubernetes',
+        region: context,
+        node_names: 'g123422',
+      },
+      {
+        id: 50,
+        name: 'pipeline',
+        status: 'RUNNING',
+        cloud: 'Kubernetes',
+        region: context,
+        node_names: 'g123422',
+      },
+    ];
+
+    const [node] = buildNodeJobRows(pipelineTasks, context, nodes);
+    expect(node.current_jobs).toEqual([
+      expect.objectContaining({ id: 50, status: 'RUNNING' }),
+    ]);
+    expect(node.job_history).toEqual([]);
+  });
+
+  it('does not show a recovering job as a current GPU consumer', () => {
+    const recovering = [{ ...jobs[0], status: 'RECOVERING' }];
+
+    const [node] = buildNodeJobRows(recovering, context, nodes);
+    expect(node.current_jobs).toEqual([]);
+    expect(node.job_history).toEqual([
+      expect.objectContaining({ id: 42, status: 'RECOVERING' }),
+    ]);
   });
 
   it('renders the node identifier, current IP, current job, and history', () => {

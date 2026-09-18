@@ -469,6 +469,9 @@ def _get_jobs_dict(r: 'row.RowMapping') -> Dict[str, Any]:
         'batch_total_batches': r.get('batch_total_batches'),
         'batch_completed_batches': r.get('batch_completed_batches'),
         'node_names': common_utils.get_display_node_names(r.get('node_names')),
+        # Keep the raw JSON lineage available to callers that need historical
+        # physical node identities (for example, after managed-job recovery).
+        'node_name_lineage': r.get('node_names'),
     }
 
 
@@ -1419,6 +1422,7 @@ def _map_response_field_to_db_column(field: str):
         'job_id': spot_table.c.spot_job_id,  # public job id -> spot.spot_job_id
         '_job_info_job_id': job_info_table.c.spot_job_id,
         'job_name': job_info_table.c.name,  # public job name -> job_info.name
+        'node_name_lineage': job_info_table.c.node_names,
         # Batch progress from batch_state aggregation subquery
         'batch_total_batches': _batch_progress_subquery.c.batch_total_batches,
         'batch_completed_batches':
@@ -1504,8 +1508,12 @@ def build_managed_jobs_with_filters_no_status_query(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
     user_hashes: Optional[List[Optional[str]]] = None,
     skip_finished: bool = False,
+    finished_only: bool = False,
     submitted_after: Optional[float] = None,
     submitted_before: Optional[float] = None,
     count_only: bool = False,
@@ -1578,6 +1586,20 @@ def build_managed_jobs_with_filters_no_status_query(
                 )).distinct())
         query = query.where(
             spot_table.c.spot_job_id.in_(non_terminal_job_ids_subquery))
+    if finished_only:
+        terminal_status_values = [
+            s.value for s in ManagedJobStatus.terminal_statuses()
+        ]
+        non_terminal_job_ids_subquery = (sqlalchemy.select(
+            spot_table.c.spot_job_id).where(
+                sqlalchemy.or_(
+                    spot_table.c.status.is_(None),
+                    sqlalchemy.not_(
+                        spot_table.c.status.in_(terminal_status_values)),
+                )).distinct())
+        query = query.where(
+            sqlalchemy.not_(
+                spot_table.c.spot_job_id.in_(non_terminal_job_ids_subquery)))
     if not count_only and not status_count and fields:
         # Resolve requested field names to explicit ColumnElements from
         # the joined tables.
@@ -1595,6 +1617,12 @@ def build_managed_jobs_with_filters_no_status_query(
         query = query.where(job_info_table.c.name.like(f'%{name_match}%'))
     if pool_match is not None:
         query = query.where(job_info_table.c.pool.like(f'%{pool_match}%'))
+    if cloud is not None:
+        query = query.where(job_info_table.c.cloud == cloud)
+    if region is not None:
+        query = query.where(job_info_table.c.region == region)
+    if require_node_names:
+        query = query.where(job_info_table.c.node_names.is_not(None))
     if user_hashes is not None:
         query = query.where(job_info_table.c.user_hash.in_(user_hashes))
     if submitted_after is not None or submitted_before is not None:
@@ -1627,9 +1655,13 @@ def build_managed_jobs_with_filters_query(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
     user_hashes: Optional[List[Optional[str]]] = None,
     statuses: Optional[List[str]] = None,
     skip_finished: bool = False,
+    finished_only: bool = False,
     submitted_after: Optional[float] = None,
     submitted_before: Optional[float] = None,
     count_only: bool = False,
@@ -1649,8 +1681,12 @@ def build_managed_jobs_with_filters_query(
         workspace_match=workspace_match,
         name_match=name_match,
         pool_match=pool_match,
+        cloud=cloud,
+        region=region,
+        require_node_names=require_node_names,
         user_hashes=user_hashes,
         skip_finished=skip_finished,
+        finished_only=finished_only,
         submitted_after=submitted_after,
         submitted_before=submitted_before,
         count_only=count_only,
@@ -1671,8 +1707,12 @@ def get_status_count_with_filters(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
     user_hashes: Optional[List[Optional[str]]] = None,
     skip_finished: bool = False,
+    finished_only: bool = False,
     submitted_after: Optional[float] = None,
     submitted_before: Optional[float] = None,
     status_expr: Optional['sqlalchemy.ColumnElement'] = None,
@@ -1689,8 +1729,12 @@ def get_status_count_with_filters(
         workspace_match=workspace_match,
         name_match=name_match,
         pool_match=pool_match,
+        cloud=cloud,
+        region=region,
+        require_node_names=require_node_names,
         user_hashes=user_hashes,
         skip_finished=skip_finished,
+        finished_only=finished_only,
         submitted_after=submitted_after,
         submitted_before=submitted_before,
         status_count=True,
@@ -1776,9 +1820,13 @@ def get_managed_jobs_with_filters(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
     user_hashes: Optional[List[Optional[str]]] = None,
     statuses: Optional[List[str]] = None,
     skip_finished: bool = False,
+    finished_only: bool = False,
     submitted_after: Optional[float] = None,
     submitted_before: Optional[float] = None,
     page: Optional[int] = None,
@@ -1842,9 +1890,13 @@ def get_managed_jobs_with_filters(
         workspace_match=workspace_match,
         name_match=name_match,
         pool_match=pool_match,
+        cloud=cloud,
+        region=region,
+        require_node_names=require_node_names,
         user_hashes=user_hashes,
         statuses=statuses,
         skip_finished=skip_finished,
+        finished_only=finished_only,
         submitted_after=submitted_after,
         submitted_before=submitted_before,
         count_unique_jobs=True,
@@ -1867,9 +1919,13 @@ def get_managed_jobs_with_filters(
             workspace_match=workspace_match,
             name_match=name_match,
             pool_match=pool_match,
+            cloud=cloud,
+            region=region,
+            require_node_names=require_node_names,
             user_hashes=user_hashes,
             statuses=statuses,
             skip_finished=skip_finished,
+            finished_only=finished_only,
             submitted_after=submitted_after,
             submitted_before=submitted_before,
             status_expr=status_expr,
@@ -1912,9 +1968,13 @@ def get_managed_jobs_with_filters(
             workspace_match=workspace_match,
             name_match=name_match,
             pool_match=pool_match,
+            cloud=cloud,
+            region=region,
+            require_node_names=require_node_names,
             user_hashes=user_hashes,
             statuses=statuses,
             skip_finished=skip_finished,
+            finished_only=finished_only,
             status_expr=status_expr,
         )
     else:
@@ -1926,9 +1986,13 @@ def get_managed_jobs_with_filters(
             workspace_match=workspace_match,
             name_match=name_match,
             pool_match=pool_match,
+            cloud=cloud,
+            region=region,
+            require_node_names=require_node_names,
             user_hashes=user_hashes,
             statuses=statuses,
             skip_finished=skip_finished,
+            finished_only=finished_only,
             submitted_after=submitted_after,
             submitted_before=submitted_before,
             status_expr=status_expr,

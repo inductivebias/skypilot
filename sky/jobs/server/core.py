@@ -237,6 +237,10 @@ class _DefaultManagedJobRunner:
         workspace_match: Optional[str],
         name_match: Optional[str],
         pool_match: Optional[str],
+        cloud: Optional[str],
+        region: Optional[str],
+        require_node_names: bool,
+        finished_only: bool,
         page: Optional[int],
         limit: Optional[int],
         user_hashes: Optional[List[Optional[str]]],
@@ -265,8 +269,9 @@ class _DefaultManagedJobRunner:
         with metrics_lib.time_it('jobs.queue.generate_code', group='jobs'):
             code = managed_job_utils.ManagedJobCodeGen.get_job_table(
                 skip_finished, accessible_workspaces, job_ids, workspace_match,
-                name_match, pool_match, page, limit, user_hashes, statuses,
-                fields, sort_by, sort_order, submitted_after, submitted_before)
+                name_match, pool_match, cloud, region, require_node_names,
+                finished_only, page, limit, user_hashes, statuses, fields,
+                sort_by, sort_order, submitted_after, submitted_before)
         with metrics_lib.time_it('jobs.queue.run_on_head', group='jobs'):
             returncode, job_table_payload, stderr = backend.run_on_head(
                 handle,
@@ -1239,6 +1244,10 @@ def queue_v2_api(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
+    finished_only: bool = False,
     page: Optional[int] = None,
     limit: Optional[int] = None,
     statuses: Optional[List[str]] = None,
@@ -1252,8 +1261,9 @@ def queue_v2_api(
     jobs to responses.ManagedJobRecord."""
     jobs, total, status_counts, total_no_filter = queue_v2(
         refresh, skip_finished, all_users, job_ids, user_match, workspace_match,
-        name_match, pool_match, page, limit, statuses, fields, sort_by,
-        sort_order, submitted_after, submitted_before)
+        name_match, pool_match, cloud, region, require_node_names,
+        finished_only, page, limit, statuses, fields, sort_by, sort_order,
+        submitted_after, submitted_before)
     return [responses.ManagedJobRecord(**job) for job in jobs
            ], total, status_counts, total_no_filter
 
@@ -1268,6 +1278,10 @@ def queue_v2(
     workspace_match: Optional[str] = None,
     name_match: Optional[str] = None,
     pool_match: Optional[str] = None,
+    cloud: Optional[str] = None,
+    region: Optional[str] = None,
+    require_node_names: bool = False,
+    finished_only: bool = False,
     page: Optional[int] = None,
     limit: Optional[int] = None,
     statuses: Optional[List[str]] = None,
@@ -1358,6 +1372,10 @@ def queue_v2(
                 workspace_match=workspace_match,
                 name_match=name_match,
                 pool_match=pool_match,
+                cloud=cloud,
+                region=region,
+                require_node_names=require_node_names,
+                finished_only=finished_only,
                 page=page,
                 limit=limit,
                 # Remove None from user_hashes, as the gRPC server uses the
@@ -1395,6 +1413,10 @@ def queue_v2(
          workspace_match=workspace_match,
          name_match=name_match,
          pool_match=pool_match,
+         cloud=cloud,
+         region=region,
+         require_node_names=require_node_names,
+         finished_only=finished_only,
          page=page,
          limit=limit,
          user_hashes=user_hashes,

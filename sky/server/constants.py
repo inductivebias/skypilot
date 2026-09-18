@@ -10,7 +10,7 @@ from sky.skylet import constants
 # based on version info is needed.
 # For more details and code guidelines, refer to:
 # https://docs.skypilot.co/en/latest/developers/CONTRIBUTING.html#backward-compatibility-guidelines
-API_VERSION = 56  # resize field on LaunchBody
+API_VERSION = 57  # managed job infrastructure/node-history filters
 
 # The minimum peer API version that the code should still work with.
 # Notes (dev):
@@ -78,6 +78,10 @@ MIN_JOBS_SUBMITTED_AT_FILTER_API_VERSION = 54
 # clients don't know the value and would crash parsing it, so the server
 # downgrades WAITING to RUNNING on the wire for clients below this version.
 MIN_WAITING_STATUS_API_VERSION = 55
+
+# Minimum API version that supports managed-job filtering by infrastructure,
+# persisted node names, and fully finished unique jobs.
+MIN_JOB_NODE_HISTORY_API_VERSION = 57
 
 # Prefix for API request names.
 REQUEST_NAME_PREFIX = 'sky.'

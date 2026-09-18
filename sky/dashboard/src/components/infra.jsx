@@ -46,7 +46,7 @@ import {
   getEnabledCloudsBatch,
 } from '@/data/connectors/workspaces';
 import { getClusters } from '@/data/connectors/clusters';
-import { getManagedJobs } from '@/data/connectors/jobs';
+import { computeJobGroupStatus, getManagedJobs } from '@/data/connectors/jobs';
 import { apiClient } from '@/data/connectors/client';
 import {
   getSSHNodePools,
@@ -101,20 +101,22 @@ const INFRA_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const INFRA_PAGE_SIZE_STORAGE_KEY = 'skypilot-infra-page-size';
 const NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY =
   'skypilot-infra-node-job-history-page-size';
-const JOB_HISTORY_OPTIONS = {
+const JOB_NODE_FIELDS = [
+  'job_id',
+  'job_name',
+  'user_name',
+  'submitted_at',
+  'status',
+  'resources',
+  'cloud',
+  'region',
+  'node_names',
+  'is_primary_in_job_group',
+];
+const LEGACY_JOB_HISTORY_OPTIONS = {
   allUsers: true,
   skipFinished: false,
-  fields: [
-    'job_id',
-    'job_name',
-    'user_name',
-    'submitted_at',
-    'status',
-    'resources',
-    'cloud',
-    'region',
-    'node_names',
-  ],
+  fields: JOB_NODE_FIELDS,
 };
 
 const TERMINAL_JOB_STATUSES = new Set([
@@ -125,6 +127,11 @@ const TERMINAL_JOB_STATUSES = new Set([
   'FAILED_PRECHECKS',
   'FAILED_NO_RESOURCE',
   'FAILED_CONTROLLER',
+]);
+const CURRENT_NODE_JOB_STATUSES = new Set([
+  'RUNNING',
+  'WINDING_DOWN',
+  'CANCELLING',
 ]);
 
 // The unified infra table's Name column is wide; allow much longer names
@@ -288,6 +295,59 @@ export const GpuTypeSummaryStrip = ({ gpus }) => {
   );
 };
 
+function getNodeLineages(job) {
+  if (job.node_name_lineage) {
+    try {
+      const parsed = JSON.parse(job.node_name_lineage);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((lineage) =>
+            (Array.isArray(lineage) ? lineage : [lineage]).filter(Boolean)
+          )
+          .filter((lineage) => lineage.length > 0);
+      }
+    } catch {
+      // Older API servers only return the current comma-separated names.
+    }
+  }
+  return (job.node_names || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => [name]);
+}
+
+function aggregateJobs(jobs) {
+  const tasksByJob = new Map();
+  jobs.forEach((job) => {
+    if (!tasksByJob.has(job.id)) tasksByJob.set(job.id, []);
+    tasksByJob.get(job.id).push(job);
+  });
+
+  return Array.from(tasksByJob.values()).map((tasks) => {
+    const first = tasks[0];
+    const resources = [
+      ...new Set(tasks.map((task) => task.requested_resources).filter(Boolean)),
+    ];
+    const lineages =
+      tasks.map(getNodeLineages).find((candidate) => candidate.length > 0) ||
+      [];
+    return {
+      id: first.id,
+      name: first.name || `Job ${first.id}`,
+      status: computeJobGroupStatus(tasks),
+      requested_resources:
+        resources.length <= 1
+          ? resources[0]
+          : `${resources[0]} (+${resources.length - 1} more)`,
+      submitted_at: first.submitted_at,
+      cloud: first.cloud,
+      region: first.region,
+      lineages,
+    };
+  });
+}
+
 export function buildNodeJobRows(jobs, contextName, nodes) {
   const contextKey = buildContextStatsKey(contextName);
   const rowsByNode = new Map();
@@ -302,42 +362,55 @@ export function buildNodeJobRows(jobs, contextName, nodes) {
     });
   });
 
-  (jobs || []).forEach((job) => {
+  const addJob = (nodeName, collection, jobSummary) => {
+    if (!rowsByNode.has(nodeName)) {
+      rowsByNode.set(nodeName, {
+        node_name: nodeName,
+        ip_address: null,
+        is_present: false,
+        current_jobs: [],
+        job_history: [],
+      });
+    }
+    const row = rowsByNode.get(nodeName);
+    if (!row[collection].some((existing) => existing.id === jobSummary.id)) {
+      row[collection].push(jobSummary);
+    }
+  };
+
+  aggregateJobs(jobs || []).forEach((job) => {
     if (buildContextStatsKeyFromCloud(job.cloud, job.region) !== contextKey) {
       return;
     }
-
-    const nodeNames = (job.node_names || '')
-      .split(',')
-      .map((name) => name.trim())
-      .filter(Boolean);
-    if (nodeNames.length === 0) return;
-
     const jobSummary = {
       id: job.id,
-      name: job.name || `Job ${job.id}`,
+      name: job.name,
       status: job.status,
       requested_resources: job.requested_resources,
       submitted_at: job.submitted_at,
+      is_terminal: TERMINAL_JOB_STATUSES.has(job.status),
     };
-    const collection = TERMINAL_JOB_STATUSES.has(job.status)
-      ? 'job_history'
-      : 'current_jobs';
-
-    nodeNames.forEach((nodeName) => {
-      if (!rowsByNode.has(nodeName)) {
-        rowsByNode.set(nodeName, {
-          node_name: nodeName,
-          ip_address: null,
-          is_present: false,
-          current_jobs: [],
-          job_history: [],
-        });
-      }
-      const row = rowsByNode.get(nodeName);
-      if (!row[collection].some((existing) => existing.id === jobSummary.id)) {
-        row[collection].push(jobSummary);
-      }
+    const latestNames = new Set(job.lineages.map((lineage) => lineage.at(-1)));
+    job.lineages.forEach((lineage) => {
+      lineage.forEach((nodeName) => {
+        const isLatestName = latestNames.has(nodeName);
+        const isCurrentAssignment =
+          !jobSummary.is_terminal &&
+          CURRENT_NODE_JOB_STATUSES.has(job.status) &&
+          isLatestName &&
+          rowsByNode.get(nodeName)?.is_present;
+        const isHistoricalAssignment =
+          jobSummary.is_terminal ||
+          job.status === 'RECOVERING' ||
+          (CURRENT_NODE_JOB_STATUSES.has(job.status) && !isCurrentAssignment);
+        if (isCurrentAssignment || isHistoricalAssignment) {
+          addJob(
+            nodeName,
+            isCurrentAssignment ? 'current_jobs' : 'job_history',
+            jobSummary
+          );
+        }
+      });
     });
   });
 
@@ -366,23 +439,29 @@ export function buildNodeJobRows(jobs, contextName, nodes) {
 }
 
 export function paginateNodeJobRows(rows, requestedPage, pageSize) {
-  const historyAssignments = rows
-    .flatMap((row) => row.job_history.map((job) => ({ row, job })))
+  const terminalJobs = new Map();
+  rows.forEach((row) =>
+    row.job_history.forEach((job) => {
+      if (job.is_terminal && !terminalJobs.has(job.id)) {
+        terminalJobs.set(job.id, job);
+      }
+    })
+  );
+  const orderedJobIds = Array.from(terminalJobs.values())
     .sort((a, b) => {
-      const aTime = a.job.submitted_at?.getTime?.() || 0;
-      const bTime = b.job.submitted_at?.getTime?.() || 0;
-      return (
-        bTime - aTime ||
-        (b.job.id || 0) - (a.job.id || 0) ||
-        Number(b.row.is_present) - Number(a.row.is_present) ||
-        a.row.node_name.localeCompare(b.row.node_name)
-      );
-    });
-  const totalCount = historyAssignments.length;
+      const aTime = a.submitted_at?.getTime?.() || 0;
+      const bTime = b.submitted_at?.getTime?.() || 0;
+      return bTime - aTime || (b.id || 0) - (a.id || 0);
+    })
+    .map((job) => job.id);
+  const totalCount = orderedJobIds.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const currentPage = Math.min(Math.max(requestedPage, 1), totalPages);
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, totalCount);
+  const visibleHistoryJobIds = new Set(
+    orderedJobIds.slice(startIndex, endIndex)
+  );
   const visibleRows = new Map();
 
   const addRow = (row) => {
@@ -399,9 +478,13 @@ export function paginateNodeJobRows(rows, requestedPage, pageSize) {
   rows
     .filter((row) => row.current_jobs.length > 0)
     .forEach((row) => addRow(row));
-  historyAssignments
-    .slice(startIndex, endIndex)
-    .forEach(({ row, job }) => addRow(row).job_history.push(job));
+  rows.forEach((row) => {
+    row.job_history.forEach((job) => {
+      if (!job.is_terminal || visibleHistoryJobIds.has(job.id)) {
+        addRow(row).job_history.push(job);
+      }
+    });
+  });
 
   return {
     rows: Array.from(visibleRows.values()),
@@ -446,28 +529,31 @@ export const NodeJobHistory = ({
   nodes,
   jobs,
   isLoading = false,
+  historyPage = 1,
+  historyPageSize = 10,
+  historyTotal = null,
+  onHistoryPageChange = () => {},
+  onHistoryPageSizeChange = () => {},
 }) => {
   const rows = buildNodeJobRows(jobs, contextName, nodes);
-  const [historyPage, setHistoryPage] = useState(1);
-  const [historyPageSize, setHistoryPageSize] = useState(() =>
-    getPersistedPageSize(
-      NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY,
-      INFRA_PAGE_SIZE_OPTIONS,
-      10
-    )
+  const clientPaginated = paginateNodeJobRows(
+    rows,
+    historyPage,
+    historyPageSize
   );
-  const paginated = paginateNodeJobRows(rows, historyPage, historyPageSize);
+  const isServerPaginated = historyTotal !== null;
+  const totalCount = isServerPaginated
+    ? historyTotal
+    : clientPaginated.totalCount;
+  const totalPages = Math.max(1, Math.ceil(totalCount / historyPageSize));
+  const currentPage = Math.min(Math.max(historyPage, 1), totalPages);
+  const startIndex = (currentPage - 1) * historyPageSize;
+  const endIndex = Math.min(startIndex + historyPageSize, totalCount);
+  const displayedRows = isServerPaginated ? rows : clientPaginated.rows;
 
   useEffect(() => {
-    setHistoryPage(1);
-  }, [contextName]);
-
-  const handleHistoryPageSizeChange = (event) => {
-    const nextPageSize = Number(event.target.value);
-    setHistoryPageSize(nextPageSize);
-    persistPageSize(NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY, nextPageSize);
-    setHistoryPage(1);
-  };
+    if (historyPage !== currentPage) onHistoryPageChange(currentPage);
+  }, [currentPage, historyPage, onHistoryPageChange]);
 
   return (
     <div className="mt-6">
@@ -477,7 +563,7 @@ export const NodeJobHistory = ({
           <CircularProgress size={16} className="mr-2" />
           Loading job history...
         </div>
-      ) : paginated.rows.length === 0 ? (
+      ) : displayedRows.length === 0 ? (
         <div className="rounded-md border border-gray-200 shadow-sm">
           <EmptyState
             icon={<ServerIcon className="w-5 h-5" />}
@@ -506,7 +592,7 @@ export const NodeJobHistory = ({
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {paginated.rows.map((row) => (
+                {displayedRows.map((row) => (
                   <tr
                     key={row.node_name}
                     className="align-top hover:bg-gray-50"
@@ -534,24 +620,22 @@ export const NodeJobHistory = ({
             </table>
           </div>
           <PaginationControls
-            currentPage={paginated.currentPage}
-            totalPages={paginated.totalPages}
-            totalCount={paginated.totalCount}
-            startIndex={paginated.startIndex}
-            endIndex={paginated.endIndex}
-            onPageChange={setHistoryPage}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalCount={totalCount}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onPageChange={onHistoryPageChange}
             onPreviousPage={() =>
-              setHistoryPage(Math.max(1, paginated.currentPage - 1))
+              onHistoryPageChange(Math.max(1, currentPage - 1))
             }
             onNextPage={() =>
-              setHistoryPage(
-                Math.min(paginated.totalPages, paginated.currentPage + 1)
-              )
+              onHistoryPageChange(Math.min(totalPages, currentPage + 1))
             }
-            isPrevDisabled={paginated.currentPage <= 1}
-            isNextDisabled={paginated.currentPage >= paginated.totalPages}
+            isPrevDisabled={currentPage <= 1}
+            isNextDisabled={currentPage >= totalPages}
             pageSize={historyPageSize}
-            onPageSizeChange={handleHistoryPageSizeChange}
+            onPageSizeChange={onHistoryPageSizeChange}
             pageSizeOptions={INFRA_PAGE_SIZE_OPTIONS}
             itemLabel="History jobs"
           />
@@ -1142,6 +1226,11 @@ export function ContextDetails({
   nodesInContext,
   jobs = [],
   isJobHistoryLoading = false,
+  jobHistoryPage = 1,
+  jobHistoryPageSize = 10,
+  jobHistoryTotal = null,
+  onJobHistoryPageChange = () => {},
+  onJobHistoryPageSizeChange = () => {},
   gpuMetricsRefreshTrigger = 0,
   isSlurm = false,
 }) {
@@ -1512,6 +1601,11 @@ export function ContextDetails({
               nodes={nodesInContext}
               jobs={jobs}
               isLoading={isJobHistoryLoading}
+              historyPage={jobHistoryPage}
+              historyPageSize={jobHistoryPageSize}
+              historyTotal={jobHistoryTotal}
+              onHistoryPageChange={onJobHistoryPageChange}
+              onHistoryPageSizeChange={onJobHistoryPageSizeChange}
             />
           )}
 
@@ -1723,6 +1817,11 @@ function SSHNodePoolDetails({
   nodesInContext,
   jobs,
   isJobHistoryLoading,
+  jobHistoryPage,
+  jobHistoryPageSize,
+  jobHistoryTotal,
+  onJobHistoryPageChange,
+  onJobHistoryPageSizeChange,
   handleDeploySSHPool,
   handleEditSSHPool,
   handleDeleteSSHPool,
@@ -2141,6 +2240,11 @@ function SSHNodePoolDetails({
         nodesInContext={nodesInContext}
         jobs={jobs}
         isJobHistoryLoading={isJobHistoryLoading}
+        jobHistoryPage={jobHistoryPage}
+        jobHistoryPageSize={jobHistoryPageSize}
+        jobHistoryTotal={jobHistoryTotal}
+        onJobHistoryPageChange={onJobHistoryPageChange}
+        onJobHistoryPageSizeChange={onJobHistoryPageSizeChange}
       />
 
       {/* Confirmation Dialog */}
@@ -2593,6 +2697,15 @@ export function GPUs() {
   const [sshAndKubeJobsData, setSshAndKubeJobsData] = useState({});
   const [jobHistory, setJobHistory] = useState([]);
   const [jobHistoryLoading, setJobHistoryLoading] = useState(false);
+  const [jobHistoryPage, setJobHistoryPage] = useState(1);
+  const [jobHistoryPageSize, setJobHistoryPageSize] = useState(() =>
+    getPersistedPageSize(
+      NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY,
+      INFRA_PAGE_SIZE_OPTIONS,
+      10
+    )
+  );
+  const [jobHistoryTotal, setJobHistoryTotal] = useState(null);
   const [clusterDataLoading, setClusterDataLoading] = useState(true);
   const [lastFetchedTime, setLastFetchedTime] = useState(null);
 
@@ -2616,18 +2729,60 @@ export function GPUs() {
       if (!selectedContext) return;
       try {
         if (showLoadingIndicator) setJobHistoryLoading(true);
-        const jobsData = forceRefresh
-          ? await getManagedJobs(JOB_HISTORY_OPTIONS)
-          : await dashboardCache.get(getManagedJobs, [JOB_HISTORY_OPTIONS]);
-        setJobHistory(jobsData?.jobs || []);
+        const isSSH = selectedContext.startsWith('ssh-');
+        const infrastructureOptions = {
+          cloud: isSSH ? 'SSH' : 'Kubernetes',
+          region: isSSH
+            ? selectedContext.replace(/^ssh-/, '')
+            : selectedContext,
+          requireNodeNames: true,
+          fields: JOB_NODE_FIELDS,
+          allUsers: true,
+        };
+        const currentOptions = {
+          ...infrastructureOptions,
+          skipFinished: true,
+        };
+        const historyOptions = {
+          ...infrastructureOptions,
+          finishedOnly: true,
+          page: jobHistoryPage,
+          limit: jobHistoryPageSize,
+          sortBy: 'submitted_at',
+          sortOrder: 'desc',
+        };
+        const fetchJobs = (options) =>
+          forceRefresh
+            ? getManagedJobs(options)
+            : dashboardCache.get(getManagedJobs, [options]);
+        const [currentData, historyData] = await Promise.all([
+          fetchJobs(currentOptions),
+          fetchJobs(historyOptions),
+        ]);
+
+        // API servers before v57 ignore the infrastructure/history filters.
+        // Keep those deployments usable while limiting the unbounded fallback
+        // to the compatibility path only.
+        if (!historyData?.apiVersion || historyData.apiVersion < 57) {
+          const legacyData = await fetchJobs(LEGACY_JOB_HISTORY_OPTIONS);
+          setJobHistory(legacyData?.jobs || []);
+          setJobHistoryTotal(null);
+        } else {
+          setJobHistory([
+            ...(currentData?.jobs || []),
+            ...(historyData?.jobs || []),
+          ]);
+          setJobHistoryTotal(historyData?.total || 0);
+        }
       } catch (error) {
         console.error('Error fetching node job history:', error);
         setJobHistory([]);
+        setJobHistoryTotal(0);
       } finally {
         if (showLoadingIndicator) setJobHistoryLoading(false);
       }
     },
-    [selectedContext]
+    [jobHistoryPage, jobHistoryPageSize, selectedContext]
   );
 
   const fetchData = React.useCallback(
@@ -2737,12 +2892,26 @@ export function GPUs() {
 
   useEffect(() => {
     if (selectedContext) {
-      fetchJobHistoryData();
+      setJobHistoryPage(1);
     } else {
       setJobHistory([]);
       setJobHistoryLoading(false);
     }
+    // Page changes are fetched by the separate effect below; resetting the
+    // page here is only tied to navigation between infrastructure contexts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedContext]);
+
+  useEffect(() => {
+    if (selectedContext) fetchJobHistoryData();
   }, [fetchJobHistoryData, selectedContext]);
+
+  const handleJobHistoryPageSizeChange = React.useCallback((event) => {
+    const nextPageSize = Number(event.target.value);
+    setJobHistoryPageSize(nextPageSize);
+    persistPageSize(NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY, nextPageSize);
+    setJobHistoryPage(1);
+  }, []);
 
   const fetchKubernetesData = async (
     forceRefresh,
@@ -3131,7 +3300,7 @@ export function GPUs() {
     dashboardCache.invalidate(getManagedJobs, [
       { allUsers: true, skipFinished: true },
     ]);
-    dashboardCache.invalidate(getManagedJobs, [JOB_HISTORY_OPTIONS]);
+    dashboardCache.invalidate(getManagedJobs, [LEGACY_JOB_HISTORY_OPTIONS]);
     dashboardCache.invalidate(getWorkspaceContexts);
     dashboardCache.invalidate(getWorkspaceInfrastructure); // Keep for backwards compatibility
     dashboardCache.invalidate(getEnabledCloudsList);
@@ -3459,6 +3628,11 @@ export function GPUs() {
           nodesInContext={nodesInContext}
           jobs={jobHistory}
           isJobHistoryLoading={jobHistoryLoading}
+          jobHistoryPage={jobHistoryPage}
+          jobHistoryPageSize={jobHistoryPageSize}
+          jobHistoryTotal={jobHistoryTotal}
+          onJobHistoryPageChange={setJobHistoryPage}
+          onJobHistoryPageSizeChange={handleJobHistoryPageSizeChange}
           handleDeploySSHPool={handleDeploySSHPool}
           handleEditSSHPool={handleEditSSHPool}
           handleDeleteSSHPool={handleDeleteSSHPool}
@@ -3475,6 +3649,11 @@ export function GPUs() {
         nodesInContext={nodesInContext}
         jobs={jobHistory}
         isJobHistoryLoading={jobHistoryLoading}
+        jobHistoryPage={jobHistoryPage}
+        jobHistoryPageSize={jobHistoryPageSize}
+        jobHistoryTotal={jobHistoryTotal}
+        onJobHistoryPageChange={setJobHistoryPage}
+        onJobHistoryPageSizeChange={handleJobHistoryPageSizeChange}
         gpuMetricsRefreshTrigger={gpuMetricsRefreshTrigger}
         isSlurm={isSlurmCluster}
       />

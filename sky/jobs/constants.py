@@ -83,7 +83,7 @@ JOBS_CLUSTER_NAME_PREFIX_LENGTH = 25
 # job.utils.ManagedJobCodeGen to handle the version update.
 # WARNING: If you update this due to a codegen change, make sure to make the
 # corresponding change in the ManagedJobsService AND bump the SKYLET_VERSION.
-MANAGED_JOBS_VERSION = 22  # add submitted_after/submitted_before to job table
+MANAGED_JOBS_VERSION = 23  # add infrastructure/node-history filters
 
 # Prefix used for service-account tokens issued to managed jobs that opt in
 # to api_server_access. The expired-token-cleanup daemon uses this prefix to
