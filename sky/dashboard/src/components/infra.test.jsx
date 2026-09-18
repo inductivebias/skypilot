@@ -1,8 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import {
   aggregateGPUsForContexts,
+  buildNodeJobRows,
   GpuTypeSummaryStrip,
   InfrastructureSection,
+  NodeJobHistory,
 } from '@/components/infra';
 
 describe('aggregateGPUsForContexts', () => {
@@ -146,4 +148,80 @@ it('renders one unified per-context table without a Requestable column', () => {
   expect(table).toHaveTextContent('0 of 8 free');
   expect(table).not.toHaveTextContent('Requestable');
   expect(container.querySelectorAll('table')).toHaveLength(1);
+});
+
+describe('node job history', () => {
+  const context = 'cks-use06a';
+  const nodes = [
+    { node_name: 'g123422', ip_address: '10.192.206.243' },
+    { node_name: 'gd8c0da', ip_address: '10.192.207.5' },
+  ];
+  const jobs = [
+    {
+      id: 42,
+      name: 'training-current',
+      status: 'RUNNING',
+      cloud: 'Kubernetes',
+      region: context,
+      node_names: 'g123422',
+      requested_resources: 'H100:8',
+      submitted_at: new Date('2026-09-18T12:00:00Z'),
+    },
+    {
+      id: 41,
+      name: 'training-finished',
+      status: 'SUCCEEDED',
+      cloud: 'Kubernetes',
+      region: context,
+      node_names: 'g123422,g-autoscaled-away',
+      submitted_at: new Date('2026-09-17T12:00:00Z'),
+    },
+    {
+      id: 40,
+      name: 'other-context',
+      status: 'RUNNING',
+      cloud: 'Kubernetes',
+      region: 'other-context',
+      node_names: 'g123422',
+    },
+  ];
+
+  it('groups current and terminal jobs and retains removed node IDs', () => {
+    expect(buildNodeJobRows(jobs, context, nodes)).toEqual([
+      {
+        node_name: 'g123422',
+        ip_address: '10.192.206.243',
+        is_present: true,
+        current_jobs: [expect.objectContaining({ id: 42 })],
+        job_history: [expect.objectContaining({ id: 41 })],
+      },
+      {
+        node_name: 'gd8c0da',
+        ip_address: '10.192.207.5',
+        is_present: true,
+        current_jobs: [],
+        job_history: [],
+      },
+      {
+        node_name: 'g-autoscaled-away',
+        ip_address: null,
+        is_present: false,
+        current_jobs: [],
+        job_history: [expect.objectContaining({ id: 41 })],
+      },
+    ]);
+  });
+
+  it('renders the node identifier, current IP, current job, and history', () => {
+    render(<NodeJobHistory contextName={context} nodes={nodes} jobs={jobs} />);
+
+    expect(screen.getByText('g123422')).toBeInTheDocument();
+    expect(screen.getByText('10.192.206.243')).toBeInTheDocument();
+    expect(screen.getByText('training-current')).toBeInTheDocument();
+    expect(screen.getByText('H100:8')).toBeInTheDocument();
+    expect(screen.getAllByText('training-finished')).toHaveLength(2);
+    expect(screen.getByText('g-autoscaled-away')).toBeInTheDocument();
+    expect(screen.getByText('removed')).toBeInTheDocument();
+    expect(screen.queryByText('other-context')).not.toBeInTheDocument();
+  });
 });

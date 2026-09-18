@@ -23,7 +23,10 @@ import {
   formatMemory,
   calculateAggregatedResource,
 } from '@/utils/resourceUtils';
-import { buildContextStatsKey } from '@/utils/infraUtils';
+import {
+  buildContextStatsKey,
+  buildContextStatsKeyFromCloud,
+} from '@/utils/infraUtils';
 import { canonicalizeGpuName } from '@/utils/gpuUtils';
 import { getPersistedPageSize, persistPageSize } from '@/lib/utils';
 import {
@@ -95,6 +98,31 @@ import {
 const REFRESH_INTERVAL = REFRESH_INTERVALS.REFRESH_INTERVAL;
 const INFRA_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const INFRA_PAGE_SIZE_STORAGE_KEY = 'skypilot-infra-page-size';
+const JOB_HISTORY_OPTIONS = {
+  allUsers: true,
+  skipFinished: false,
+  fields: [
+    'job_id',
+    'job_name',
+    'user_name',
+    'submitted_at',
+    'status',
+    'resources',
+    'cloud',
+    'region',
+    'node_names',
+  ],
+};
+
+const TERMINAL_JOB_STATUSES = new Set([
+  'SUCCEEDED',
+  'CANCELLED',
+  'FAILED',
+  'FAILED_SETUP',
+  'FAILED_PRECHECKS',
+  'FAILED_NO_RESOURCE',
+  'FAILED_CONTROLLER',
+]);
 
 // The unified infra table's Name column is wide; allow much longer names
 // before middle-ellipsis truncation kicks in (full name stays in the tooltip).
@@ -253,6 +281,184 @@ export const GpuTypeSummaryStrip = ({ gpus }) => {
           );
         })}
       </div>
+    </div>
+  );
+};
+
+export function buildNodeJobRows(jobs, contextName, nodes) {
+  const contextKey = buildContextStatsKey(contextName);
+  const rowsByNode = new Map();
+
+  (nodes || []).forEach((node) => {
+    rowsByNode.set(node.node_name, {
+      node_name: node.node_name,
+      ip_address: node.ip_address || null,
+      is_present: true,
+      current_jobs: [],
+      job_history: [],
+    });
+  });
+
+  (jobs || []).forEach((job) => {
+    if (buildContextStatsKeyFromCloud(job.cloud, job.region) !== contextKey) {
+      return;
+    }
+
+    const nodeNames = (job.node_names || '')
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    if (nodeNames.length === 0) return;
+
+    const jobSummary = {
+      id: job.id,
+      name: job.name || `Job ${job.id}`,
+      status: job.status,
+      requested_resources: job.requested_resources,
+      submitted_at: job.submitted_at,
+    };
+    const collection = TERMINAL_JOB_STATUSES.has(job.status)
+      ? 'job_history'
+      : 'current_jobs';
+
+    nodeNames.forEach((nodeName) => {
+      if (!rowsByNode.has(nodeName)) {
+        rowsByNode.set(nodeName, {
+          node_name: nodeName,
+          ip_address: null,
+          is_present: false,
+          current_jobs: [],
+          job_history: [],
+        });
+      }
+      const row = rowsByNode.get(nodeName);
+      if (!row[collection].some((existing) => existing.id === jobSummary.id)) {
+        row[collection].push(jobSummary);
+      }
+    });
+  });
+
+  const newestFirst = (a, b) => {
+    const aTime = a.submitted_at?.getTime?.() || 0;
+    const bTime = b.submitted_at?.getTime?.() || 0;
+    return bTime - aTime || (b.id || 0) - (a.id || 0);
+  };
+  rowsByNode.forEach((row) => {
+    row.current_jobs.sort(newestFirst);
+    row.job_history.sort(newestFirst);
+  });
+
+  return Array.from(rowsByNode.values())
+    .filter(
+      (row) =>
+        row.current_jobs.length > 0 ||
+        row.job_history.length > 0 ||
+        row.is_present
+    )
+    .sort(
+      (a, b) =>
+        Number(b.is_present) - Number(a.is_present) ||
+        a.node_name.localeCompare(b.node_name)
+    );
+}
+
+const JobList = ({ jobs }) => {
+  if (jobs.length === 0) {
+    return <span className="text-gray-400">—</span>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {jobs.map((job) => (
+        <div key={job.id} className="min-w-0">
+          <Link
+            href={`/jobs/${job.id}`}
+            className="text-blue-600 hover:underline font-medium break-words"
+          >
+            {job.name}
+          </Link>
+          <div className="text-xs text-gray-500 mt-0.5">
+            #{job.id} · {job.status}
+          </div>
+          {job.requested_resources && (
+            <div className="text-xs text-gray-500 mt-0.5">
+              {job.requested_resources}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export const NodeJobHistory = ({
+  contextName,
+  nodes,
+  jobs,
+  isLoading = false,
+}) => {
+  const rows = buildNodeJobRows(jobs, contextName, nodes);
+
+  return (
+    <div className="mt-6">
+      <h4 className="text-lg font-semibold mb-4">Jobs by Node</h4>
+      {isLoading ? (
+        <div className="flex items-center text-sm text-gray-500">
+          <CircularProgress size={16} className="mr-2" />
+          Loading job history...
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-md border border-gray-200 shadow-sm">
+          <EmptyState
+            icon={<ServerIcon className="w-5 h-5" />}
+            title="No node job history"
+            description="No managed jobs have recorded a node in this context"
+          />
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-gray-200 shadow-sm">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-3 text-left font-medium text-gray-600">
+                  Node
+                </th>
+                <th className="p-3 text-left font-medium text-gray-600">
+                  IP Address
+                </th>
+                <th className="p-3 text-left font-medium text-gray-600">
+                  Current Jobs
+                </th>
+                <th className="p-3 text-left font-medium text-gray-600">
+                  History
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {rows.map((row) => (
+                <tr key={row.node_name} className="align-top hover:bg-gray-50">
+                  <td className="p-3 whitespace-nowrap text-gray-700">
+                    {row.node_name}
+                    {!row.is_present && (
+                      <span className="ml-2 text-xs text-gray-400">
+                        removed
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3 whitespace-nowrap text-gray-700">
+                    {row.ip_address || '—'}
+                  </td>
+                  <td className="p-3 min-w-64">
+                    <JobList jobs={row.current_jobs} />
+                  </td>
+                  <td className="p-3 min-w-64">
+                    <JobList jobs={row.job_history} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };
@@ -836,6 +1042,8 @@ export function ContextDetails({
   contextName,
   gpusInContext,
   nodesInContext,
+  jobs = [],
+  isJobHistoryLoading = false,
   gpuMetricsRefreshTrigger = 0,
   isSlurm = false,
 }) {
@@ -1200,6 +1408,15 @@ export function ContextDetails({
             </div>
           )}
 
+          {!isSlurm && (
+            <NodeJobHistory
+              contextName={contextName}
+              nodes={nodesInContext}
+              jobs={jobs}
+              isLoading={isJobHistoryLoading}
+            />
+          )}
+
           {/* GPU Metrics Section - only show for k8s contexts, not SSH node pools or Slurm */}
           {isGrafanaAvailable &&
             gpusInContext &&
@@ -1406,6 +1623,8 @@ function SSHNodePoolDetails({
   poolName,
   gpusInContext,
   nodesInContext,
+  jobs,
+  isJobHistoryLoading,
   handleDeploySSHPool,
   handleEditSSHPool,
   handleDeleteSSHPool,
@@ -1822,6 +2041,8 @@ function SSHNodePoolDetails({
         contextName={`ssh-${poolName}`}
         gpusInContext={gpusInContext}
         nodesInContext={nodesInContext}
+        jobs={jobs}
+        isJobHistoryLoading={isJobHistoryLoading}
       />
 
       {/* Confirmation Dialog */}
@@ -2272,6 +2493,8 @@ export function GPUs() {
   const [sshAndKubeJobsDataLoading, setSshAndKubeJobsDataLoading] =
     useState(true);
   const [sshAndKubeJobsData, setSshAndKubeJobsData] = useState({});
+  const [jobHistory, setJobHistory] = useState([]);
+  const [jobHistoryLoading, setJobHistoryLoading] = useState(false);
   const [clusterDataLoading, setClusterDataLoading] = useState(true);
   const [lastFetchedTime, setLastFetchedTime] = useState(null);
 
@@ -2289,6 +2512,25 @@ export function GPUs() {
 
   // Selected context for subpage view
   const [selectedContext, setSelectedContext] = useState(null);
+
+  const fetchJobHistoryData = React.useCallback(
+    async (forceRefresh = false, showLoadingIndicator = true) => {
+      if (!selectedContext) return;
+      try {
+        if (showLoadingIndicator) setJobHistoryLoading(true);
+        const jobsData = forceRefresh
+          ? await getManagedJobs(JOB_HISTORY_OPTIONS)
+          : await dashboardCache.get(getManagedJobs, [JOB_HISTORY_OPTIONS]);
+        setJobHistory(jobsData?.jobs || []);
+      } catch (error) {
+        console.error('Error fetching node job history:', error);
+        setJobHistory([]);
+      } finally {
+        if (showLoadingIndicator) setJobHistoryLoading(false);
+      }
+    },
+    [selectedContext]
+  );
 
   const fetchData = React.useCallback(
     async (options = { showLoadingIndicators: true }) => {
@@ -2328,6 +2570,9 @@ export function GPUs() {
           fetchSSHNodePools(forceRefresh),
           fetchCloudData(forceRefresh),
           fetchManagedJobsData(),
+          selectedContext
+            ? fetchJobHistoryData(forceRefresh, showLoadingIndicators)
+            : Promise.resolve(),
           fetchClusterStatsData(),
           fetchSlurmData(),
         ]);
@@ -2389,8 +2634,17 @@ export function GPUs() {
         }
       }
     },
-    [isInitialLoad]
+    [fetchJobHistoryData, isInitialLoad, selectedContext]
   );
+
+  useEffect(() => {
+    if (selectedContext) {
+      fetchJobHistoryData();
+    } else {
+      setJobHistory([]);
+      setJobHistoryLoading(false);
+    }
+  }, [fetchJobHistoryData, selectedContext]);
 
   const fetchKubernetesData = async (
     forceRefresh,
@@ -2761,6 +3015,8 @@ export function GPUs() {
       setSlurmDataLoaded(false);
       setIsInitialLoad(true);
       setSshAndKubeJobsDataLoading(false);
+      setJobHistory([]);
+      setJobHistoryLoading(false);
       setClusterDataLoading(false);
     };
   }, []);
@@ -2777,6 +3033,7 @@ export function GPUs() {
     dashboardCache.invalidate(getManagedJobs, [
       { allUsers: true, skipFinished: true },
     ]);
+    dashboardCache.invalidate(getManagedJobs, [JOB_HISTORY_OPTIONS]);
     dashboardCache.invalidate(getWorkspaceContexts);
     dashboardCache.invalidate(getWorkspaceInfrastructure); // Keep for backwards compatibility
     dashboardCache.invalidate(getEnabledCloudsList);
@@ -3102,6 +3359,8 @@ export function GPUs() {
           poolName={poolName}
           gpusInContext={gpusInContext}
           nodesInContext={nodesInContext}
+          jobs={jobHistory}
+          isJobHistoryLoading={jobHistoryLoading}
           handleDeploySSHPool={handleDeploySSHPool}
           handleEditSSHPool={handleEditSSHPool}
           handleDeleteSSHPool={handleDeleteSSHPool}
@@ -3116,6 +3375,8 @@ export function GPUs() {
         contextName={contextName}
         gpusInContext={gpusInContext}
         nodesInContext={nodesInContext}
+        jobs={jobHistory}
+        isJobHistoryLoading={jobHistoryLoading}
         gpuMetricsRefreshTrigger={gpuMetricsRefreshTrigger}
         isSlurm={isSlurmCluster}
       />
