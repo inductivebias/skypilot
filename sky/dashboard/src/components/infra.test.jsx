@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import {
   aggregateGPUsForContexts,
   buildNodeJobRows,
+  getNodeJobInfrastructureOptions,
   GpuTypeSummaryStrip,
   InfrastructureSection,
   NodeJobHistory,
@@ -22,6 +23,26 @@ describe('getInfraContextHref', () => {
     );
     expect(getInfraContextHref('AWS', 'us-east-1')).toBeNull();
     expect(getInfraContextHref('Kubernetes', null)).toBeNull();
+  });
+});
+
+describe('getNodeJobInfrastructureOptions', () => {
+  it('keeps the persisted SSH context prefix when filtering jobs', () => {
+    expect(
+      getNodeJobInfrastructureOptions('ssh-deploy-lambda-1')
+    ).toMatchObject({
+      cloud: 'SSH',
+      region: 'ssh-deploy-lambda-1',
+      requireNodeNames: true,
+    });
+  });
+
+  it('uses the Kubernetes context unchanged when filtering jobs', () => {
+    expect(getNodeJobInfrastructureOptions('cks-use06a')).toMatchObject({
+      cloud: 'Kubernetes',
+      region: 'cks-use06a',
+      requireNodeNames: true,
+    });
   });
 });
 

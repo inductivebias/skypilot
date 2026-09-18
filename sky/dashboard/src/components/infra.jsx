@@ -120,6 +120,18 @@ const LEGACY_JOB_HISTORY_OPTIONS = {
   fields: JOB_NODE_FIELDS,
 };
 
+export function getNodeJobInfrastructureOptions(selectedContext) {
+  const isSSH = selectedContext.startsWith('ssh-');
+  return {
+    cloud: isSSH ? 'SSH' : 'Kubernetes',
+    // Managed jobs persist the full SSH context name as their region.
+    region: selectedContext,
+    requireNodeNames: true,
+    fields: JOB_NODE_FIELDS,
+    allUsers: true,
+  };
+}
+
 const TERMINAL_JOB_STATUSES = new Set([
   'SUCCEEDED',
   'CANCELLED',
@@ -2733,16 +2745,8 @@ export function GPUs() {
       const requestId = ++jobHistoryRequestIdRef.current;
       try {
         if (showLoadingIndicator) setJobHistoryLoading(true);
-        const isSSH = selectedContext.startsWith('ssh-');
-        const infrastructureOptions = {
-          cloud: isSSH ? 'SSH' : 'Kubernetes',
-          region: isSSH
-            ? selectedContext.replace(/^ssh-/, '')
-            : selectedContext,
-          requireNodeNames: true,
-          fields: JOB_NODE_FIELDS,
-          allUsers: true,
-        };
+        const infrastructureOptions =
+          getNodeJobInfrastructureOptions(selectedContext);
         const currentOptions = {
           ...infrastructureOptions,
           skipFinished: true,
