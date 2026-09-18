@@ -5,6 +5,7 @@ import {
   GpuTypeSummaryStrip,
   InfrastructureSection,
   NodeJobHistory,
+  paginateNodeJobRows,
 } from '@/components/infra';
 
 describe('aggregateGPUsForContexts', () => {
@@ -212,6 +213,38 @@ describe('node job history', () => {
     ]);
   });
 
+  it('paginates history while keeping current jobs visible', () => {
+    const rows = buildNodeJobRows(jobs, context, nodes);
+
+    const firstPage = paginateNodeJobRows(rows, 1, 1);
+    expect(firstPage).toMatchObject({
+      currentPage: 1,
+      totalPages: 2,
+      totalCount: 2,
+      startIndex: 0,
+      endIndex: 1,
+    });
+    expect(firstPage.rows).toHaveLength(1);
+    expect(firstPage.rows[0].current_jobs).toEqual([
+      expect.objectContaining({ id: 42 }),
+    ]);
+    expect(firstPage.rows[0].job_history).toEqual([
+      expect.objectContaining({ id: 41 }),
+    ]);
+
+    const secondPage = paginateNodeJobRows(rows, 2, 1);
+    expect(secondPage.rows).toHaveLength(2);
+    expect(secondPage.rows[0].current_jobs).toEqual([
+      expect.objectContaining({ id: 42 }),
+    ]);
+    expect(secondPage.rows[0].job_history).toEqual([]);
+    expect(secondPage.rows[1]).toMatchObject({
+      node_name: 'g-autoscaled-away',
+      is_present: false,
+      job_history: [expect.objectContaining({ id: 41 })],
+    });
+  });
+
   it('renders the node identifier, current IP, current job, and history', () => {
     render(<NodeJobHistory contextName={context} nodes={nodes} jobs={jobs} />);
 
@@ -222,6 +255,11 @@ describe('node job history', () => {
     expect(screen.getAllByText('training-finished')).toHaveLength(2);
     expect(screen.getByText('g-autoscaled-away')).toBeInTheDocument();
     expect(screen.getByText('removed')).toBeInTheDocument();
+    expect(screen.getByText('History jobs per page:')).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).toHaveValue('10');
+    expect(
+      screen.getByRole('combobox').querySelectorAll('option')
+    ).toHaveLength(4);
     expect(screen.queryByText('other-context')).not.toBeInTheDocument();
   });
 });

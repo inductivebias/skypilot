@@ -84,6 +84,7 @@ import {
   NonCapitalizedTooltip,
   LastUpdatedTimestamp,
 } from '@/components/utils';
+import { PaginationControls } from '@/components/elements/PaginationControls';
 import { Tooltip } from '@nextui-org/tooltip';
 import { Card } from '@/components/ui/card';
 import {
@@ -98,6 +99,8 @@ import {
 const REFRESH_INTERVAL = REFRESH_INTERVALS.REFRESH_INTERVAL;
 const INFRA_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const INFRA_PAGE_SIZE_STORAGE_KEY = 'skypilot-infra-page-size';
+const NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY =
+  'skypilot-infra-node-job-history-page-size';
 const JOB_HISTORY_OPTIONS = {
   allUsers: true,
   skipFinished: false,
@@ -362,6 +365,54 @@ export function buildNodeJobRows(jobs, contextName, nodes) {
     );
 }
 
+export function paginateNodeJobRows(rows, requestedPage, pageSize) {
+  const historyAssignments = rows
+    .flatMap((row) => row.job_history.map((job) => ({ row, job })))
+    .sort((a, b) => {
+      const aTime = a.job.submitted_at?.getTime?.() || 0;
+      const bTime = b.job.submitted_at?.getTime?.() || 0;
+      return (
+        bTime - aTime ||
+        (b.job.id || 0) - (a.job.id || 0) ||
+        Number(b.row.is_present) - Number(a.row.is_present) ||
+        a.row.node_name.localeCompare(b.row.node_name)
+      );
+    });
+  const totalCount = historyAssignments.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const currentPage = Math.min(Math.max(requestedPage, 1), totalPages);
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalCount);
+  const visibleRows = new Map();
+
+  const addRow = (row) => {
+    if (!visibleRows.has(row.node_name)) {
+      visibleRows.set(row.node_name, {
+        ...row,
+        current_jobs: [...row.current_jobs],
+        job_history: [],
+      });
+    }
+    return visibleRows.get(row.node_name);
+  };
+
+  rows
+    .filter((row) => row.current_jobs.length > 0)
+    .forEach((row) => addRow(row));
+  historyAssignments
+    .slice(startIndex, endIndex)
+    .forEach(({ row, job }) => addRow(row).job_history.push(job));
+
+  return {
+    rows: Array.from(visibleRows.values()),
+    currentPage,
+    totalPages,
+    totalCount,
+    startIndex,
+    endIndex,
+  };
+}
+
 const JobList = ({ jobs }) => {
   if (jobs.length === 0) {
     return <span className="text-gray-400">—</span>;
@@ -397,6 +448,26 @@ export const NodeJobHistory = ({
   isLoading = false,
 }) => {
   const rows = buildNodeJobRows(jobs, contextName, nodes);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(() =>
+    getPersistedPageSize(
+      NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY,
+      INFRA_PAGE_SIZE_OPTIONS,
+      10
+    )
+  );
+  const paginated = paginateNodeJobRows(rows, historyPage, historyPageSize);
+
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [contextName]);
+
+  const handleHistoryPageSizeChange = (event) => {
+    const nextPageSize = Number(event.target.value);
+    setHistoryPageSize(nextPageSize);
+    persistPageSize(NODE_JOB_HISTORY_PAGE_SIZE_STORAGE_KEY, nextPageSize);
+    setHistoryPage(1);
+  };
 
   return (
     <div className="mt-6">
@@ -406,7 +477,7 @@ export const NodeJobHistory = ({
           <CircularProgress size={16} className="mr-2" />
           Loading job history...
         </div>
-      ) : rows.length === 0 ? (
+      ) : paginated.rows.length === 0 ? (
         <div className="rounded-md border border-gray-200 shadow-sm">
           <EmptyState
             icon={<ServerIcon className="w-5 h-5" />}
@@ -415,48 +486,75 @@ export const NodeJobHistory = ({
           />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-md border border-gray-200 shadow-sm">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-3 text-left font-medium text-gray-600">
-                  Node
-                </th>
-                <th className="p-3 text-left font-medium text-gray-600">
-                  IP Address
-                </th>
-                <th className="p-3 text-left font-medium text-gray-600">
-                  Current Jobs
-                </th>
-                <th className="p-3 text-left font-medium text-gray-600">
-                  History
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {rows.map((row) => (
-                <tr key={row.node_name} className="align-top hover:bg-gray-50">
-                  <td className="p-3 whitespace-nowrap text-gray-700">
-                    {row.node_name}
-                    {!row.is_present && (
-                      <span className="ml-2 text-xs text-gray-400">
-                        removed
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-3 whitespace-nowrap text-gray-700">
-                    {row.ip_address || '—'}
-                  </td>
-                  <td className="p-3 min-w-64">
-                    <JobList jobs={row.current_jobs} />
-                  </td>
-                  <td className="p-3 min-w-64">
-                    <JobList jobs={row.job_history} />
-                  </td>
+        <div className="rounded-md border border-gray-200 shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="p-3 text-left font-medium text-gray-600">
+                    Node
+                  </th>
+                  <th className="p-3 text-left font-medium text-gray-600">
+                    IP Address
+                  </th>
+                  <th className="p-3 text-left font-medium text-gray-600">
+                    Current Jobs
+                  </th>
+                  <th className="p-3 text-left font-medium text-gray-600">
+                    History
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {paginated.rows.map((row) => (
+                  <tr
+                    key={row.node_name}
+                    className="align-top hover:bg-gray-50"
+                  >
+                    <td className="p-3 whitespace-nowrap text-gray-700">
+                      {row.node_name}
+                      {!row.is_present && (
+                        <span className="ml-2 text-xs text-gray-400">
+                          removed
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-3 whitespace-nowrap text-gray-700">
+                      {row.ip_address || '—'}
+                    </td>
+                    <td className="p-3 min-w-64">
+                      <JobList jobs={row.current_jobs} />
+                    </td>
+                    <td className="p-3 min-w-64">
+                      <JobList jobs={row.job_history} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <PaginationControls
+            currentPage={paginated.currentPage}
+            totalPages={paginated.totalPages}
+            totalCount={paginated.totalCount}
+            startIndex={paginated.startIndex}
+            endIndex={paginated.endIndex}
+            onPageChange={setHistoryPage}
+            onPreviousPage={() =>
+              setHistoryPage(Math.max(1, paginated.currentPage - 1))
+            }
+            onNextPage={() =>
+              setHistoryPage(
+                Math.min(paginated.totalPages, paginated.currentPage + 1)
+              )
+            }
+            isPrevDisabled={paginated.currentPage <= 1}
+            isNextDisabled={paginated.currentPage >= paginated.totalPages}
+            pageSize={historyPageSize}
+            onPageSizeChange={handleHistoryPageSizeChange}
+            pageSizeOptions={INFRA_PAGE_SIZE_OPTIONS}
+            itemLabel="History jobs"
+          />
         </div>
       )}
     </div>
