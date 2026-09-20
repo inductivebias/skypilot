@@ -20,6 +20,7 @@ from sky.server.requests import continue_condition as continue_condition_lib
 from sky.server.requests import executor
 from sky.server.requests import payloads
 from sky.server.requests import process
+from sky.server.requests import request_names
 from sky.server.requests import requests as requests_lib
 from sky.skylet import constants
 from sky.utils import context_utils
@@ -104,6 +105,27 @@ def dummy_entrypoint(*args, **kwargs):
     """Dummy entrypoint function for testing."""
     time.sleep(2)
     return 'success'
+
+
+@pytest.mark.asyncio
+async def test_execute_request_direct_does_not_create_request_state(
+        isolated_database, mock_global_user_state, mock_skypilot_config):
+    body = payloads.RequestBody(
+        env_vars={
+            constants.USER_ID_ENV_VAR: 'test-user-id',
+            constants.USER_ENV_VAR: 'test-user',
+        })
+
+    result = await executor.execute_request_direct_async(
+        request_id='direct-read',
+        request_name=request_names.RequestName.JOBS_QUEUE_V2,
+        request_body=body,
+        func=lambda: 'result')
+
+    assert result == 'result'
+    assert requests_lib._DB is None
+    assert not any(
+        pathlib.Path(server_constants.REQUEST_LOG_PATH_PREFIX).iterdir())
 
 
 @pytest.mark.asyncio

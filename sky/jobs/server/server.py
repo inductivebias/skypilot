@@ -1,9 +1,11 @@
 """REST API for managed jobs."""
 
 import pathlib
+from typing import Any, Dict
 
 import fastapi
 
+from sky import exceptions
 from sky import sky_logging
 from sky.jobs import utils as managed_jobs_utils
 from sky.jobs.server import core
@@ -14,6 +16,7 @@ from sky.server.requests import payloads
 from sky.server.requests import request_names
 from sky.server.requests import requests as api_requests
 from sky.server.requests import role_filter
+from sky.server.requests.serializers import encoders
 from sky.skylet import constants
 from sky.utils import common
 
@@ -94,6 +97,34 @@ async def queue_v2(
         request_cluster_name=common.JOB_CONTROLLER_NAME,
         auth_user=request.state.auth_user,
     )
+
+
+@router.post('/queue/v2/sync')
+async def queue_v2_sync(
+    request: fastapi.Request,
+    jobs_queue_body_v2: payloads.JobsQueueV2Body = fastapi.Depends(
+        role_filter.force_viewer_jobs_queue_v2_body),
+) -> Dict[str, Any]:
+    """Return a read-only queue query without durable request state."""
+    if jobs_queue_body_v2.refresh:
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail='The synchronous queue endpoint does not support refresh.')
+    try:
+        result = await executor.execute_request_direct_async(
+            request_id=request.state.request_id,
+            request_name=request_names.RequestName.JOBS_QUEUE_V2,
+            request_body=jobs_queue_body_v2,
+            func=core.queue_v2_api,
+            auth_user=request.state.auth_user,
+        )
+    except Exception as error:
+        raise fastapi.HTTPException(
+            status_code=500,
+            detail=exceptions.serialize_exception(error)) from error
+    encoded = encoders.encode_jobs_queue_v2(result)
+    assert isinstance(encoded, dict), type(encoded)
+    return encoded
 
 
 @router.post('/wait')

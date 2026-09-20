@@ -132,6 +132,10 @@ _DEFAULT_VIEWER_ALLOWLIST = [
         'method': 'POST'
     },
     {
+        'path': '/jobs/queue/v2/sync',
+        'method': 'POST'
+    },
+    {
         'path': '/jobs/wait',
         'method': 'POST'
     },

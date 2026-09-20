@@ -10,7 +10,7 @@ from sky.skylet import constants
 # based on version info is needed.
 # For more details and code guidelines, refer to:
 # https://docs.skypilot.co/en/latest/developers/CONTRIBUTING.html#backward-compatibility-guidelines
-API_VERSION = 57  # managed job infrastructure/node-history filters
+API_VERSION = 58  # Synchronous managed-jobs queue reads
 
 # The minimum peer API version that the code should still work with.
 # Notes (dev):
@@ -72,6 +72,11 @@ MIN_PREFERRED_WORKSPACE_API_VERSION = 53
 # --since / --after / --before flags). Older servers silently ignore these
 # fields, so the client warns and shows all jobs.
 MIN_JOBS_SUBMITTED_AT_FILTER_API_VERSION = 54
+
+# Minimum server API version that supports the synchronous managed-jobs queue
+# endpoint. Unlike queue_v2, this endpoint returns the filtered result directly
+# and never creates an API request row or request log.
+MIN_SYNC_JOBS_QUEUE_API_VERSION = 58
 
 # Servers >= this version may report the WAITING request status (a request
 # parked off its worker while waiting for a retry/resume condition). Older

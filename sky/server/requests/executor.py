@@ -988,6 +988,48 @@ async def _execute_request_coroutine(request: api_requests.Request):
         ctx.cancel()
 
 
+def _prepare_request_body_context(request_body: payloads.RequestBody,
+                                  auth_user: Optional[models.User],
+                                  is_skypilot_system: bool = False) -> str:
+    """Stamp trusted dispatch context onto a request body."""
+    if auth_user is not None:
+        assert auth_user.name is not None
+        # Use the authenticated identity, never client-supplied identity.
+        user_id = auth_user.id
+        request_body.env_vars[constants.USER_ID_ENV_VAR] = user_id
+        request_body.env_vars[constants.USER_ENV_VAR] = auth_user.name
+    else:
+        user_id = request_body.env_vars[constants.USER_ID_ENV_VAR]
+    if is_skypilot_system:
+        user_id = constants.SKYPILOT_SYSTEM_USER_ID
+        global_user_state.add_or_update_user(
+            models.User(id=user_id,
+                        name=user_id,
+                        user_type=models.UserType.SYSTEM.value))
+
+    # This value is trusted only when captured from the dispatch context.
+    # Overwrite any client-supplied value before either durable or direct
+    # execution.
+    request_body.client_api_version = versions.get_remote_api_version()
+    return user_id
+
+
+async def execute_request_direct_async(
+        request_id: str,
+        request_name: request_names.RequestName,
+        request_body: payloads.RequestBody,
+        func: Callable[P, Any],
+        auth_user: Optional[models.User] = None) -> Any:
+    """Execute a short request without persisting request state or logs."""
+    _prepare_request_body_context(request_body, auth_user)
+    check_request_thread_executor_available()
+    return await context_utils.to_thread_with_executor(
+        get_request_thread_executor(), _execute_with_config_override, func,
+        request_body, request_id,
+        server_constants.REQUEST_NAME_PREFIX + request_name,
+        **request_body.to_kwargs())
+
+
 async def prepare_request_async(
     request_id: str,
     request_name: request_names.RequestName,
@@ -999,34 +1041,8 @@ async def prepare_request_async(
     auth_user: Optional[models.User] = None,
 ) -> api_requests.Request:
     """Prepare a request for execution."""
-    if auth_user is not None:
-        assert auth_user.name is not None
-        # Use the authenticated user identity as the single source of truth
-        # if present.
-        user_id = auth_user.id
-        # Set user identity for executors.
-        request_body.env_vars[constants.USER_ID_ENV_VAR] = user_id
-        request_body.env_vars[constants.USER_ENV_VAR] = auth_user.name
-    else:
-        # Fallback to legacy environment variable based identity if no
-        # authentication is set.
-        user_id = request_body.env_vars[constants.USER_ID_ENV_VAR]
-    if is_skypilot_system:
-        user_id = constants.SKYPILOT_SYSTEM_USER_ID
-        global_user_state.add_or_update_user(
-            models.User(id=user_id,
-                        name=user_id,
-                        user_type=models.UserType.SYSTEM.value))
-    # Capture the client's API version from the FastAPI dispatch context
-    # into the request body so it survives the process boundary into the
-    # worker that runs the request. APIVersionMiddleware set the
-    # ContextVar from the X-SkyPilot-API-Version header; reading it here
-    # (still in the async dispatch process) and stamping the body is the
-    # one place where header -> body translation happens, so neither the
-    # Python SDK nor the dashboard need their own stamping logic. Old
-    # clients (no header) yield None, which the worker-side gate treats
-    # as "skip the workspace resolver".
-    request_body.client_api_version = versions.get_remote_api_version()
+    user_id = _prepare_request_body_context(request_body, auth_user,
+                                            is_skypilot_system)
     request = api_requests.Request(
         request_id=request_id,
         name=server_constants.REQUEST_NAME_PREFIX + request_name,

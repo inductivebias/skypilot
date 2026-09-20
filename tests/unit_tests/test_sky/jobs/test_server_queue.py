@@ -1,8 +1,10 @@
 """Unit tests for the jobs server queue."""
 import time
+import types
 from typing import Any, Dict, List, Optional
 from unittest import mock
 
+import fastapi
 import pytest
 
 from sky.jobs import constants as managed_job_constants
@@ -10,6 +12,10 @@ from sky.jobs import state as managed_job_state
 from sky.jobs import utils as jobs_utils
 # Target under test
 from sky.jobs.server import core as jobs_core
+from sky.jobs.server import server as jobs_server
+from sky.schemas.api import responses
+from sky.server.requests import executor
+from sky.server.requests import payloads
 from sky.skylet import constants as skylet_constants
 
 
@@ -32,6 +38,49 @@ def test_v1_queue_handler_defaults_to_lightweight_fields():
     _, kwargs = mock_queue_v2.call_args
     assert kwargs['fields'] == list(
         managed_job_constants.DEFAULT_MANAGED_JOB_FIELDS)
+
+
+@pytest.mark.asyncio
+async def test_queue_v2_sync_bypasses_durable_request_executor():
+    request = types.SimpleNamespace(
+        state=types.SimpleNamespace(request_id='request-id', auth_user=None))
+    body = payloads.JobsQueueV2Body(
+        refresh=False,
+        env_vars={
+            skylet_constants.USER_ID_ENV_VAR: 'user-id',
+            skylet_constants.USER_ENV_VAR: 'user',
+        })
+    result = ([
+        responses.ManagedJobRecord(
+            job_id=7,
+            job_name='train',
+            status=managed_job_state.ManagedJobStatus.RUNNING)
+    ], 1, {
+        'RUNNING': 1
+    }, 1)
+    with mock.patch.object(
+            executor,
+            'execute_request_direct_async',
+            new=mock.AsyncMock(return_value=result)) as mock_direct, \
+         mock.patch.object(executor,
+                           'schedule_request_async',
+                           new=mock.AsyncMock()) as mock_schedule:
+        response = await jobs_server.queue_v2_sync(request, body)
+
+    assert response['jobs'][0]['job_id'] == 7
+    assert response['jobs'][0]['status'] == 'RUNNING'
+    mock_direct.assert_awaited_once()
+    mock_schedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queue_v2_sync_rejects_refresh():
+    request = types.SimpleNamespace(
+        state=types.SimpleNamespace(request_id='request-id', auth_user=None))
+    body = payloads.JobsQueueV2Body(refresh=True)
+
+    with pytest.raises(fastapi.HTTPException, match='does not support refresh'):
+        await jobs_server.queue_v2_sync(request, body)
 
 
 def _make_job(job_id: int,

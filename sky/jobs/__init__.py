@@ -13,6 +13,7 @@ from sky.jobs.client.sdk import pool_sync_down_logs
 from sky.jobs.client.sdk import pool_tail_logs
 from sky.jobs.client.sdk import queue
 from sky.jobs.client.sdk import queue_v2
+from sky.jobs.client.sdk import queue_v2_sync
 from sky.jobs.client.sdk import tail_logs
 from sky.jobs.client.sdk import wait
 from sky.jobs.constants import JOBS_CLUSTER_NAME_PREFIX_LENGTH
@@ -42,6 +43,7 @@ __all__ = [
     'launch',
     'queue',
     'queue_v2',
+    'queue_v2_sync',
     'tail_logs',
     'wait',
     'dashboard',

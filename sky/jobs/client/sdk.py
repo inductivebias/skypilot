@@ -9,6 +9,7 @@ import zlib
 
 import click
 
+from sky import exceptions
 from sky import sky_logging
 from sky.backends import backend_utils
 from sky.client import common as client_common
@@ -22,6 +23,7 @@ from sky.server import rest
 from sky.server import versions
 from sky.server.requests import payloads
 from sky.server.requests import request_names
+from sky.server.requests.serializers import decoders
 from sky.skylet import constants
 from sky.usage import usage_lib
 from sky.utils import admin_policy_utils
@@ -281,6 +283,50 @@ def queue_v2(
         json=json.loads(body.model_dump_json()),
         timeout=(5, None))
     return server_common.get_request_id(response=response)
+
+
+@usage_lib.entrypoint
+@server_common.check_server_healthy_or_start
+@versions.minimal_api_version(server_constants.MIN_SYNC_JOBS_QUEUE_API_VERSION)
+def queue_v2_sync(
+    skip_finished: bool = False,
+    all_users: bool = False,
+    job_ids: Optional[List[int]] = None,
+    limit: Optional[int] = None,
+    fields: Optional[
+        Sequence[str]] = managed_job_constants.DEFAULT_MANAGED_JOB_FIELDS,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+    submitted_after: Optional[float] = None,
+    submitted_before: Optional[float] = None,
+) -> Tuple[List[responses.ManagedJobRecord], int, Dict[str, int], int]:
+    """Gets managed-job status without creating a durable API request."""
+    body = payloads.JobsQueueV2Body(
+        refresh=False,
+        skip_finished=skip_finished,
+        all_users=all_users,
+        job_ids=job_ids,
+        limit=limit,
+        fields=list(fields) if fields is not None else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        statuses=statuses,
+        submitted_after=submitted_after,
+        submitted_before=submitted_before,
+    )
+    response = server_common.make_authenticated_request(
+        'POST',
+        '/jobs/queue/v2/sync',
+        json=json.loads(body.model_dump_json()),
+        timeout=(5, None))
+    if response.status_code == 500:
+        sdk._raise_exception_object_on_client(  # pylint: disable=protected-access
+            exceptions.deserialize_exception(response.json().get('detail')))
+    response.raise_for_status()
+    result = decoders.decode_jobs_queue_v2(response.json())
+    assert isinstance(result, tuple), type(result)
+    return result
 
 
 # Deprecated. Please use queue_v2 instead for better performance.

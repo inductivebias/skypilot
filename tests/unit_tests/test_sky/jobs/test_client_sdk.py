@@ -49,6 +49,42 @@ def test_queue_v2_fields_none_requests_all_fields():
     assert body['fields'] is None
 
 
+def test_queue_v2_sync_returns_result_without_request_id():
+    raw_queue_v2_sync = _unwrap(jobs_sdk.queue_v2_sync)
+    response = mock.Mock(status_code=200)
+    response.json.return_value = {
+        'jobs': [{
+            'job_id': 7,
+            'job_name': 'train',
+            'status': 'RUNNING',
+        }],
+        'total': 1,
+        'status_counts': {
+            'RUNNING': 1
+        },
+        'total_no_filter': 9,
+    }
+    with mock.patch.object(jobs_sdk.server_common,
+                           'make_authenticated_request',
+                           return_value=response) as mock_request, \
+         mock.patch.object(jobs_sdk.server_common,
+                           'get_request_id') as mock_get_request_id:
+        jobs, total, status_counts, total_no_filter = raw_queue_v2_sync(
+            all_users=True,
+            job_ids=[7],
+            fields=['job_id', 'job_name', 'status'])
+
+    assert jobs[0].job_id == 7
+    assert jobs[0].status.value == 'RUNNING'
+    assert (total, status_counts, total_no_filter) == (1, {'RUNNING': 1}, 9)
+    args, kwargs = mock_request.call_args
+    assert args == ('POST', '/jobs/queue/v2/sync')
+    assert kwargs['json']['refresh'] is False
+    assert kwargs['json']['job_ids'] == [7]
+    assert kwargs['json']['fields'] == ['job_id', 'job_name', 'status']
+    mock_get_request_id.assert_not_called()
+
+
 def test_queue_version_2_dispatches_to_queue_v2():
     raw_queue = jobs_sdk.queue.__wrapped__.__wrapped__
 
