@@ -106,6 +106,7 @@ async def queue_v2_sync(
         role_filter.force_viewer_jobs_queue_v2_body),
 ) -> Dict[str, Any]:
     """Return a read-only queue query without durable request state."""
+    # TODO(josephz): Upstream this route to eliminate queue-poll disk growth.
     if jobs_queue_body_v2.refresh:
         raise fastapi.HTTPException(
             status_code=400,
