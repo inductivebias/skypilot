@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
+from sky import exceptions
 from sky.jobs import state as managed_job_state
 from sky.jobs.controller import ControllerManager
 from sky.jobs.controller import JobController
@@ -1241,3 +1242,116 @@ class TestUserJobStatusClassification:
 
         failure_type = mock_set_failed.call_args.kwargs['failure_type']
         assert failure_type == managed_job_state.ManagedJobStatus.FAILED
+
+
+class TestDegradedJobStatusMonitoring:
+    """Transient monitoring failures must not restart healthy workloads."""
+
+    class StopMonitoring(Exception):
+        """Stop the otherwise-infinite monitoring loop in tests."""
+
+    @staticmethod
+    def _make_controller() -> JobController:
+        controller = JobController.__new__(JobController)
+        controller._job_id = 1
+        controller._pool = None
+        controller._backend = MagicMock()
+        controller._cleanup_cluster = AsyncMock()
+        return controller
+
+    async def _run_until_stopped(
+        self,
+        cluster_status: status_lib.ClusterStatus = status_lib.ClusterStatus.UP,
+        cluster_status_error: Optional[BaseException] = None,
+    ) -> Tuple[JobController, MagicMock, AsyncMock, AsyncMock]:
+        controller = self._make_controller()
+        task = MagicMock()
+        task.name = 'test-task'
+        task.num_nodes = 1
+
+        executor = MagicMock()
+        executor.recover = AsyncMock(side_effect=self.StopMonitoring)
+        handle = MagicMock()
+        handle.launched_resources.need_cleanup_after_preemption_or_failure\
+            .return_value = False
+
+        get_job_status = AsyncMock(side_effect=[
+            (None, 'Job status check timed out after 30s.'),
+            self.StopMonitoring,
+        ])
+        set_recovering = AsyncMock()
+        refresh_cluster_status = MagicMock(return_value=(cluster_status,
+                                                         handle))
+
+        cloud_status_call = patch(
+            'sky.jobs.controller.cloud_api_retries.with_cloud_api_retries',
+            side_effect=cluster_status_error)
+        if cluster_status_error is None:
+            cloud_status_call = patch(
+                'sky.jobs.controller.cloud_api_retries.'
+                'with_cloud_api_retries',
+                side_effect=lambda fn: fn())
+
+        with patch('sky.jobs.controller.asyncio.sleep', new=AsyncMock()), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'async_check_network_connection', new=AsyncMock()), \
+             patch('sky.jobs.controller.managed_job_utils.get_job_status',
+                   new=get_job_status), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'refresh_cluster_status_handle',
+                   new=refresh_cluster_status), \
+             patch('sky.jobs.controller.managed_job_utils.'
+                   'JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS', 0), \
+             patch('sky.jobs.controller.global_user_state.'
+                   'get_cluster_events', return_value=[]), \
+             patch('sky.jobs.controller.ExternalFailureSource.is_registered',
+                   return_value=False), \
+             patch('sky.jobs.controller.managed_job_runtime.is_registered',
+                   return_value=False), \
+             patch('sky.jobs.controller.managed_job_state.'
+                   'set_recovering_async',
+                   new=set_recovering), \
+             cloud_status_call:
+            with pytest.raises(self.StopMonitoring):
+                await controller._monitor_one_task(
+                    task_id=0,
+                    task=task,
+                    cluster_name='test-cluster',
+                    executor=executor,
+                    callback_func=MagicMock(),
+                )
+
+        return controller, executor, get_job_status, set_recovering
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_status_timeout_preserves_workload(self):
+        controller, executor, get_job_status, set_recovering = (
+            await self._run_until_stopped())
+
+        assert get_job_status.await_count == 2
+        executor.recover.assert_not_awaited()
+        set_recovering.assert_not_awaited()
+        controller._cleanup_cluster.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_cluster_status_timeout_preserves_workload(
+            self):
+        error = exceptions.ClusterStatusFetchingError('API unavailable')
+        controller, executor, get_job_status, set_recovering = (
+            await self._run_until_stopped(cluster_status_error=error))
+
+        assert get_job_status.await_count == 2
+        executor.recover.assert_not_awaited()
+        set_recovering.assert_not_awaited()
+        controller._cleanup_cluster.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_confirmed_cluster_failure_still_recovers(
+            self):
+        controller, executor, _, set_recovering = (
+            await self._run_until_stopped(
+                cluster_status=status_lib.ClusterStatus.STOPPED))
+
+        executor.recover.assert_awaited_once()
+        set_recovering.assert_awaited_once()
+        controller._cleanup_cluster.assert_not_awaited()
