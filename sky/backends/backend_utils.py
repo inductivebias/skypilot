@@ -2526,6 +2526,32 @@ def check_can_clone_disk_and_override_task(
     return task, handle
 
 
+def _verify_kubernetes_exec_transport(runner: command_runner.CommandRunner,
+                                      cluster_name: str) -> None:
+    """Raise when kubectl exec cannot reach an otherwise-running pod."""
+    try:
+        result = runner.run('true',
+                            stream_logs=False,
+                            require_outputs=True,
+                            separate_stderr=True)
+    except Exception as e:  # pylint: disable=broad-except
+        raise exceptions.ClusterStatusFetchingError(
+            'Kubernetes exec transport failed while checking runtime health '
+            f'for cluster {cluster_name!r}: '
+            f'{common_utils.format_exception(e)}') from e
+
+    if not isinstance(result, tuple) or len(result) != 3:
+        raise exceptions.ClusterStatusFetchingError(
+            'Kubernetes exec transport returned an invalid result while '
+            f'checking runtime health for cluster {cluster_name!r}.')
+    returncode, _, stderr = result
+    if returncode != 0:
+        reason = stderr.strip() or f'exit code {returncode}'
+        raise exceptions.ClusterStatusFetchingError(
+            'Kubernetes exec transport failed while checking runtime health '
+            f'for cluster {cluster_name!r}: {reason}')
+
+
 def _update_cluster_status(
         cluster_name: str,
         record: Dict[str, Any],
@@ -2670,8 +2696,14 @@ def _update_cluster_status(
                                 f'{yellow}to recover from INIT status.{reset}')
                             return False
                         raise e
-                    # We retry for kubernetes because coreweave can have a
-                    # transient network issue.
+                    # A failed runtime command and an unavailable exec
+                    # transport both surface as CommandError. Only the former
+                    # proves that Ray is unhealthy. Preserve the cluster when
+                    # a harmless probe cannot reach the pod; the caller treats
+                    # ClusterStatusFetchingError as degraded observation.
+                    _verify_kubernetes_exec_transport(head_runner, cluster_name)
+                    # We retry for kubernetes because CoreWeave can have a
+                    # transient runtime issue.
                     time.sleep(1)
                     continue
                 if ready_head + ready_workers == total_nodes:
@@ -2706,6 +2738,8 @@ def _update_cluster_status(
             if ray_status_details is None:
                 ray_status_details = str(e)
             logger.debug(common_utils.format_exception(e))
+        except exceptions.ClusterStatusFetchingError:
+            raise
         except Exception as e:  # pylint: disable=broad-except
             # This can be raised by `external_ssh_ports()`, due to the
             # underlying call to kubernetes API.
