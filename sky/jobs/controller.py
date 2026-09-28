@@ -787,9 +787,9 @@ class JobController:
                 # NOTE: we do not check cluster status first because race
                 # condition can occur, i.e. cluster can be down during the job
                 # status check.
-                # NOTE: If fetching the job status fails or we force to transit
-                # to recovering, we will set the job status to None, which will
-                # force enter the recovering logic.
+                # NOTE: If fetching the job status fails or we force a
+                # transition to recovering, job status remains None. Transient
+                # fetch failures are handled using cluster health below.
                 try:
                     job_status, transient_job_check_error_reason = (
                         await managed_job_utils.get_job_status(
@@ -899,12 +899,9 @@ class JobController:
             # TODO(cooperc): do we need to add this to asyncio thread?
             # A transient provider-API error (e.g. an HTTP 503 from the
             # Kubernetes API server) during this refresh raises
-            # ClusterStatusFetchingError. Retry it a few times so a momentary
-            # blip is absorbed transparently; if it still fails, fall through
-            # to the transient-error handling below and retry on the next
-            # iteration rather than escalating to run()'s unexpected-error
-            # handling (emergency recovery), which would tear down and
-            # relaunch a healthy cluster.
+            # ClusterStatusFetchingError. Keep monitoring with bounded
+            # backoff: an unavailable control plane is not evidence that the
+            # workload failed, and recovery could tear down a healthy job.
             try:
                 (cluster_status, handle) = await asyncio.to_thread(
                     cloud_api_retries.with_cloud_api_retries,
@@ -914,17 +911,9 @@ class JobController:
             except exceptions.ClusterStatusFetchingError as e:
                 # The refresh kept failing after retries. Treat it as a
                 # transient condition and back off, reusing the transient
-                # job-status-check window. Sharing the window (rather than
-                # keeping a separate one for this handler) is deliberate: a
-                # successful get_job_status resets it, so while the job-status
-                # probe keeps returning a healthy status -- a direct positive
-                # liveness signal -- the loop keeps retrying instead of
-                # escalating. Restarting a demonstrably running job is exactly
-                # the false alarm this handler exists to prevent, and recovery
-                # could not relaunch anyway while the provider API is
-                # unreachable. Only when both get_job_status and this refresh
-                # keep failing for JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS is
-                # the error re-raised, escalating to emergency recovery.
+                # job-status-check window. The timeout is an alert threshold,
+                # not permission to recover: neither failed status read proves
+                # that the workload itself has failed.
                 if transient_job_check_error_start_time is None:
                     transient_job_check_error_start_time = time.time()
                     job_check_backoff = common_utils.Backoff(
@@ -932,21 +921,15 @@ class JobController:
                 elapsed = time.time() - transient_job_check_error_start_time
                 timeout = (
                     managed_job_utils.JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS)
-                if elapsed >= timeout:
-                    logger.error(
-                        'Failed to refresh cluster status after retrying for '
-                        f'{elapsed:.1f} seconds: '
-                        f'{common_utils.format_exception(e)}')
-                    raise
                 assert job_check_backoff is not None, (
                     transient_job_check_error_start_time, job_check_backoff)
-                backoff_time = min(job_check_backoff.current_backoff(),
-                                   timeout - elapsed)
-                logger.info(
-                    'Failed to refresh cluster status, likely due to a '
-                    'transient provider API error. Retrying to avoid a false '
-                    f'alarm for job failure. Retrying in {backoff_time:.1f} '
-                    f'seconds: {common_utils.format_exception(e)}')
+                backoff_time = job_check_backoff.current_backoff()
+                log = logger.warning if elapsed >= timeout else logger.info
+                log('Failed to refresh cluster status, likely due to a '
+                    'transient provider API error. Keeping the workload '
+                    'running and retrying degraded monitoring in '
+                    f'{backoff_time:.1f} seconds after {elapsed:.1f} seconds: '
+                    f'{common_utils.format_exception(e)}')
                 await asyncio.sleep(backoff_time)
                 continue
 
@@ -1113,8 +1096,8 @@ class JobController:
                 else:
                     # job_status is None but cluster is UP - transient error
                     # Although the cluster is healthy, we fail to access the
-                    # job status. Try to recover the job (will not restart the
-                    # cluster, if the cluster is healthy).
+                    # job status. Keep monitoring: failure to observe the job
+                    # is not evidence that the workload itself failed.
                     if transient_job_check_error_reason is not None:
                         assert (transient_job_check_error_start_time
                                 is not None), (
@@ -1126,23 +1109,16 @@ class JobController:
                         ) - transient_job_check_error_start_time
                         timeout = (managed_job_utils.
                                    JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS)
-                        if elapsed < timeout:
-                            remaining_timeout = timeout - elapsed
-                            backoff_time = min(
-                                job_check_backoff.current_backoff(),
-                                remaining_timeout)
-                            logger.info(
-                                'Failed to fetch the job status while the '
-                                'cluster is healthy. Retrying to avoid false'
-                                'alarm for job failure. Retrying in '
-                                f'{backoff_time:.1f} seconds...')
-                            await asyncio.sleep(backoff_time)
-                            continue
-                        else:
-                            logger.info(
-                                'Failed to fetch the job status after retrying '
-                                f'for {elapsed:.1f} seconds. Try to recover '
-                                'the job by restarting the job/cluster.')
+                        backoff_time = job_check_backoff.current_backoff()
+                        log = (logger.warning
+                               if elapsed >= timeout else logger.info)
+                        log('Failed to fetch the job status while the cluster '
+                            'is healthy. Keeping the workload running and '
+                            'retrying degraded monitoring in '
+                            f'{backoff_time:.1f} seconds after '
+                            f'{elapsed:.1f} seconds...')
+                        await asyncio.sleep(backoff_time)
+                        continue
                     else:
                         logger.info(
                             'Failed to fetch the job status due to '
@@ -1184,8 +1160,8 @@ class JobController:
                                 '...')
                     await self._cleanup_cluster(cluster_name)
 
-            # Try to recover the managed jobs, when the cluster is preempted or
-            # failed or the job status is failed to be fetched.
+            # Recover when the cluster is confirmed preempted or failed, or a
+            # non-transient error prevents fetching job status.
             logger.info(f'Starting recovery for task {task_id}, '
                         f'it is currently {job_status}')
             await managed_job_state.set_recovering_async(
