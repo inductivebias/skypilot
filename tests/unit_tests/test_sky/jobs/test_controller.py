@@ -16,10 +16,15 @@ from unittest.mock import patch
 
 import pytest
 
+from sky import backends
+from sky import clouds
 from sky import exceptions
+from sky import resources as resources_lib
+from sky.backends import backend_utils
 from sky.jobs import state as managed_job_state
 from sky.jobs.controller import ControllerManager
 from sky.jobs.controller import JobController
+from sky.provision import common as provision_common
 from sky.skylet import job_lib
 from sky.utils import common
 from sky.utils import status_lib
@@ -1263,6 +1268,7 @@ class TestDegradedJobStatusMonitoring:
         self,
         cluster_status: status_lib.ClusterStatus = status_lib.ClusterStatus.UP,
         cluster_status_error: Optional[BaseException] = None,
+        job_status_side_effect: Optional[List[object]] = None,
     ) -> Tuple[JobController, MagicMock, AsyncMock, AsyncMock]:
         controller = self._make_controller()
         task = MagicMock()
@@ -1275,10 +1281,12 @@ class TestDegradedJobStatusMonitoring:
         handle.launched_resources.need_cleanup_after_preemption_or_failure\
             .return_value = False
 
-        get_job_status = AsyncMock(side_effect=[
-            (None, 'Job status check timed out after 30s.'),
-            self.StopMonitoring,
-        ])
+        if job_status_side_effect is None:
+            job_status_side_effect = [
+                (None, 'Job status check timed out after 30s.'),
+                self.StopMonitoring,
+            ]
+        get_job_status = AsyncMock(side_effect=job_status_side_effect)
         set_recovering = AsyncMock()
         refresh_cluster_status = MagicMock(return_value=(cluster_status,
                                                          handle))
@@ -1341,6 +1349,151 @@ class TestDegradedJobStatusMonitoring:
             await self._run_until_stopped(cluster_status_error=error))
 
         assert get_job_status.await_count == 2
+        executor.recover.assert_not_awaited()
+        set_recovering.assert_not_awaited()
+        controller._cleanup_cluster.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_repeated_timeouts_then_restored_monitoring(
+            self):
+        controller, executor, get_job_status, set_recovering = (
+            await self._run_until_stopped(job_status_side_effect=[
+                (None, 'first timeout'),
+                (None, 'second timeout'),
+                (job_lib.JobStatus.RUNNING, None),
+                self.StopMonitoring,
+            ]))
+
+        assert get_job_status.await_count == 4
+        executor.recover.assert_not_awaited()
+        set_recovering.assert_not_awaited()
+        controller._cleanup_cluster.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_cancellation_during_degraded_monitoring(
+            self):
+        controller = self._make_controller()
+        task = MagicMock()
+        task.name = 'test-task'
+        task.num_nodes = 1
+        executor = MagicMock()
+        executor.recover = AsyncMock()
+        handle = MagicMock()
+        handle.launched_resources.need_cleanup_after_preemption_or_failure\
+            .return_value = False
+        get_job_status = AsyncMock(
+            return_value=(None, 'Job status check timed out after 30s.'))
+        set_recovering = AsyncMock()
+
+        with patch('sky.jobs.controller.asyncio.sleep',
+                   new=AsyncMock(side_effect=[None,
+                                              asyncio.CancelledError()])), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'async_check_network_connection', new=AsyncMock()), \
+             patch('sky.jobs.controller.managed_job_utils.get_job_status',
+                   new=get_job_status), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'refresh_cluster_status_handle',
+                   return_value=(status_lib.ClusterStatus.UP, handle)), \
+             patch('sky.jobs.controller.cloud_api_retries.'
+                   'with_cloud_api_retries', side_effect=lambda fn: fn()), \
+             patch('sky.jobs.controller.managed_job_utils.'
+                   'JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS', 0), \
+             patch('sky.jobs.controller.managed_job_state.'
+                   'set_recovering_async', new=set_recovering), \
+             patch('sky.jobs.controller.ExternalFailureSource.is_registered',
+                   return_value=False), \
+             patch('sky.jobs.controller.managed_job_runtime.is_registered',
+                   return_value=False):
+            with pytest.raises(asyncio.CancelledError):
+                await controller._monitor_one_task(
+                    task_id=0,
+                    task=task,
+                    cluster_name='test-cluster',
+                    executor=executor,
+                    callback_func=MagicMock(),
+                )
+
+        assert get_job_status.await_count == 1
+        executor.recover.assert_not_awaited()
+        set_recovering.assert_not_awaited()
+        controller._cleanup_cluster.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_monitor_one_task_exec_outage_stays_degraded(self):
+        controller = self._make_controller()
+        task = MagicMock()
+        task.name = 'test-task'
+        task.num_nodes = 1
+        executor = MagicMock()
+        executor.recover = AsyncMock()
+        set_recovering = AsyncMock()
+        get_job_status = AsyncMock(side_effect=[
+            (None, 'Job status check timed out after 30s.'),
+            self.StopMonitoring,
+        ])
+
+        runner = MagicMock()
+        runner.run.side_effect = [
+            (1, '', 'ray status unavailable'),
+            (1, '', 'control plane unavailable'),
+        ]
+        resources = resources_lib.Resources(cloud=clouds.Kubernetes())
+        handle = backends.CloudVmRayResourceHandle(
+            cluster_name='test-cluster',
+            cluster_name_on_cloud='test-cluster',
+            cluster_yaml='/tmp/cluster.yaml',
+            launched_nodes=1,
+            launched_resources=resources)
+        handle.provision_runtime_metadata = (
+            provision_common.ProvisionRuntimeMetadata(has_ray=True))
+        handle.get_command_runners = MagicMock(return_value=[runner])
+        record = {
+            'handle': handle,
+            'status': status_lib.ClusterStatus.UP,
+            'cluster_hash': 'cluster-hash',
+        }
+
+        def refresh_cluster_status(*_args, **_kwargs):
+            return backend_utils._update_cluster_status('test-cluster',
+                                                        record,
+                                                        retry_if_missing=True)
+
+        with patch('sky.jobs.controller.asyncio.sleep', new=AsyncMock()), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'async_check_network_connection', new=AsyncMock()), \
+             patch('sky.jobs.controller.managed_job_utils.get_job_status',
+                   new=get_job_status), \
+             patch('sky.jobs.controller.backend_utils.'
+                   'refresh_cluster_status_handle',
+                   side_effect=refresh_cluster_status), \
+             patch('sky.jobs.controller.cloud_api_retries.'
+                   'with_cloud_api_retries', side_effect=lambda fn: fn()), \
+             patch('sky.jobs.controller.managed_job_utils.'
+                   'JOB_STATUS_FETCH_TOTAL_TIMEOUT_SECONDS', 0), \
+             patch('sky.jobs.controller.managed_job_state.'
+                   'set_recovering_async', new=set_recovering), \
+             patch('sky.jobs.controller.ExternalFailureSource.is_registered',
+                   return_value=False), \
+             patch('sky.jobs.controller.managed_job_runtime.is_registered',
+                   return_value=False), \
+             patch('sky.backends.backend_utils.'
+                   '_query_cluster_status_via_cloud_api',
+                   return_value={'pod': (status_lib.ClusterStatus.UP, None)}), \
+             patch('sky.backends.backend_utils.ExternalFailureSource.get',
+                   return_value=[]), \
+             patch('sky.backends.backend_utils.global_user_state.'
+                   'add_or_update_cluster') as update_cluster:
+            with pytest.raises(self.StopMonitoring):
+                await controller._monitor_one_task(
+                    task_id=0,
+                    task=task,
+                    cluster_name='test-cluster',
+                    executor=executor,
+                    callback_func=MagicMock(),
+                )
+
+        update_cluster.assert_not_called()
         executor.recover.assert_not_awaited()
         set_recovering.assert_not_awaited()
         controller._cleanup_cluster.assert_not_awaited()
