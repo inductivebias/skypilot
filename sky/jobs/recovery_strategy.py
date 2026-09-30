@@ -506,6 +506,44 @@ class StrategyExecutor:
                 f'Refreshed priority for job {self.job_id} to {new_priority} '
                 f'(priority_class={new_priority_class}) from persisted DAG.')
 
+    async def _cancel_request(self, request_id: str) -> None:
+        """Cancel an inner launch or exec request without masking job cancel."""
+        try:
+            cancel_request_id = await asyncio.to_thread(sdk.api_cancel,
+                                                        request_id)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(f'Failed to cancel the request: {e}')
+            return
+        logger.debug(f'sdk.api_cancel request ID: {cancel_request_id}')
+        try:
+            await asyncio.to_thread(sdk.get, cancel_request_id)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(f'Failed to cancel the request: {e}')
+
+    async def _submit_request(
+        self,
+        submit: Callable[..., server_common.RequestId[Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> server_common.RequestId[Any]:
+        """Submit a request without losing its ID to task cancellation."""
+        submit_task = asyncio.create_task(
+            asyncio.to_thread(submit, *args, **kwargs))
+        try:
+            return await asyncio.shield(submit_task)
+        except asyncio.CancelledError:
+            # Cancelling an asyncio.to_thread() await does not stop its worker.
+            # Wait for the request ID, then cancel that request before the job
+            # controller proceeds to cluster cleanup.
+            try:
+                request_id = await submit_task
+            except Exception as e:  # pylint: disable=broad-except
+                logger.error(f'Request submission failed during cancellation: '
+                             f'{e}')
+            else:
+                await self._cancel_request(request_id)
+            raise
+
     async def _launch(self,
                       max_retry: Optional[int] = 3,
                       raise_on_failure: bool = True,
@@ -607,7 +645,7 @@ class StrategyExecutor:
                             request_id = None
                             try:
                                 extra_ctx = self.extra_launch_context()
-                                request_id = await asyncio.to_thread(
+                                request_id = await self._submit_request(
                                     sdk.launch,
                                     self.dag,
                                     cluster_name=self.cluster_name,
@@ -639,16 +677,7 @@ class StrategyExecutor:
                                 )
                             except asyncio.CancelledError:
                                 if request_id:
-                                    req = await asyncio.to_thread(
-                                        sdk.api_cancel, request_id)
-                                    logger.debug('sdk.api_cancel request '
-                                                 f'ID: {req}')
-                                    try:
-                                        await asyncio.to_thread(sdk.get, req)
-                                    except Exception as e:  # pylint: disable=broad-except
-                                        # we must still return a CancelledError
-                                        logger.error(
-                                            f'Failed to cancel the job: {e}')
+                                    await self._cancel_request(request_id)
                                 raise
                             logger.info('Managed job cluster launched.')
                         else:
@@ -667,7 +696,7 @@ class StrategyExecutor:
                                     'No cluster name found in the pool.')
                             request_id = None
                             try:
-                                request_id = await asyncio.to_thread(
+                                request_id = await self._submit_request(
                                     sdk.exec,
                                     self.dag,
                                     cluster_name=self.cluster_name,
@@ -680,16 +709,7 @@ class StrategyExecutor:
                                                                  request_id))
                             except asyncio.CancelledError:
                                 if request_id:
-                                    req = await asyncio.to_thread(
-                                        sdk.api_cancel, request_id)
-                                    logger.debug('sdk.api_cancel request '
-                                                 f'ID: {req}')
-                                    try:
-                                        await asyncio.to_thread(sdk.get, req)
-                                    except Exception as e:  # pylint: disable=broad-except
-                                        # we must still return a CancelledError
-                                        logger.error(
-                                            f'Failed to cancel the job: {e}')
+                                    await self._cancel_request(request_id)
                                 raise
                             assert job_id_on_pool_cluster is not None, (
                                 self.cluster_name, self.job_id)
