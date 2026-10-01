@@ -4255,8 +4255,31 @@ _ROLE_TAINT_KEY_PREFIXES = [
 ]
 
 
+def _get_custom_resource(
+        context: Optional[str],
+        custom_resource: Optional[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    """Read one exact cluster-scoped custom resource."""
+    if custom_resource is None:
+        return None
+    required = {'group', 'version', 'plural', 'name'}
+    if set(custom_resource) != required or not all(
+            isinstance(custom_resource[field], str) and custom_resource[field]
+            for field in required):
+        raise ValueError(
+            'custom_resource must contain non-empty group, version, plural, '
+            'and name strings')
+    return kubernetes.custom_resources_api(context).get_cluster_custom_object(
+        group=custom_resource['group'],
+        version=custom_resource['version'],
+        plural=custom_resource['plural'],
+        name=custom_resource['name'],
+    )
+
+
 def get_kubernetes_node_info(
-        context: Optional[str] = None) -> models.KubernetesNodesInfo:
+    context: Optional[str] = None,
+    custom_resource: Optional[Dict[str,
+                                   str]] = None) -> models.KubernetesNodesInfo:
     """Gets the resource information for all the nodes in the cluster.
 
     This function returns a model with node info map as a nested field. This
@@ -4272,13 +4295,20 @@ def get_kubernetes_node_info(
     If the user does not have sufficient permissions to list pods in all
     namespaces, the function will return free GPUs as -1.
 
+    Args:
+        context: Kubernetes context. If None, use the current context.
+        custom_resource: Optional exact cluster-scoped custom resource to read
+            with the node inventory. It must contain only ``group``,
+            ``version``, ``plural``, and ``name``.
+
     Returns:
         KubernetesNodesInfo: A model that contains the node info map and other
             information.
     """
     # Try external node info source first (e.g., node-info-service cache).
     # This allows plugins to provide cached node info for faster queries.
-    if plugin_extensions.NodeInfoSource.is_registered():
+    if (custom_resource is None and
+            plugin_extensions.NodeInfoSource.is_registered()):
         # Resolve context before calling the provider so it can be cached
         resolved_context = (context if context is not None else
                             get_current_kube_config_context_name())
@@ -4497,6 +4527,7 @@ def get_kubernetes_node_info(
     return models.KubernetesNodesInfo(
         node_info_dict=node_info_dict,
         hint=hint,
+        custom_resource=_get_custom_resource(context, custom_resource),
     )
 
 

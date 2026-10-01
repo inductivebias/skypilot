@@ -55,6 +55,9 @@ def serialize_kubernetes_node_info(return_value: Dict[str, Any]) -> str:
     """
     remote_api_version = versions.get_remote_api_version()
     if (return_value and remote_api_version is not None):
+        if (remote_api_version <
+                server_constants.MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION):
+            return_value.pop('custom_resource', None)
         for node_info in return_value.get('node_info_dict', {}).values():
             if remote_api_version < 25:
                 # Remove is_ready field for old clients that don't recognize it

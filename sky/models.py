@@ -119,6 +119,8 @@ class KubernetesNodesInfo:
     node_info_dict: Dict[str, KubernetesNodeInfo]
     # Additional hint for the node info.
     hint: str
+    # One exact read-only custom resource requested with the node snapshot.
+    custom_resource: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -127,6 +129,7 @@ class KubernetesNodesInfo:
                 for node_name, node_info in self.node_info_dict.items()
             },
             'hint': self.hint,
+            'custom_resource': self.custom_resource,
         }
 
     @classmethod
@@ -137,6 +140,7 @@ class KubernetesNodesInfo:
                 for node_name, node_info in data['node_info_dict'].items()
             },
             hint=data['hint'],
+            custom_resource=data.get('custom_resource'),
         )
 
 

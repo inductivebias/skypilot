@@ -33,6 +33,53 @@ def test_get_kubernetes_nodes():
             utils.get_kubernetes_nodes(context='test')
 
 
+def test_get_custom_resource_reads_exact_cluster_scoped_object():
+    api = mock.MagicMock()
+    expected = {
+        'metadata': {
+            'name': 'flourish-h100-spot'
+        },
+        'spec': {
+            'maxNodes': 12
+        }
+    }
+    api.get_cluster_custom_object.return_value = expected
+    selector = {
+        'group': 'compute.coreweave.com',
+        'version': 'v1alpha1',
+        'plural': 'nodepools',
+        'name': 'flourish-h100-spot',
+    }
+
+    with patch(
+            'sky.provision.kubernetes.utils.kubernetes.'
+            'custom_resources_api',
+            return_value=api):
+        result = utils._get_custom_resource('cks-use06a', selector)
+
+    assert result == expected
+    api.get_cluster_custom_object.assert_called_once_with(**selector)
+
+
+@pytest.mark.parametrize('selector', [
+    {},
+    {
+        'group': 'compute.coreweave.com',
+        'version': 'v1alpha1',
+        'plural': 'nodepools',
+    },
+    {
+        'group': 'compute.coreweave.com',
+        'version': 'v1alpha1',
+        'plural': 'nodepools',
+        'name': '',
+    },
+])
+def test_get_custom_resource_rejects_invalid_selector(selector):
+    with pytest.raises(ValueError, match='non-empty group'):
+        utils._get_custom_resource('cks-use06a', selector)
+
+
 def test_get_kubernetes_node_info():
     """Tests get_kubernetes_node_info function."""
     # Mock node and pod objects

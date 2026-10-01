@@ -1,4 +1,5 @@
 """Unit tests for return_value_serializers module."""
+import copy
 import json
 from unittest import mock
 
@@ -150,6 +151,36 @@ class TestSerializeKubernetesNodeInfo:
         data = {'other_key': 'value'}
         result = return_value_serializers.serialize_kubernetes_node_info(data)
         assert json.loads(result) == data
+
+    @mock.patch(
+        'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
+    )
+    def test_custom_resource_requires_api_version_58(self, mock_get_version):
+        data = {
+            'node_info_dict': {},
+            'hint': '',
+            'custom_resource': {
+                'spec': {
+                    'maxNodes': 12
+                }
+            },
+        }
+        mock_get_version.return_value = 57
+
+        old_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert 'custom_resource' not in json.loads(old_result)
+        mock_get_version.return_value = 58
+
+        new_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert json.loads(new_result)['custom_resource'] == {
+            'spec': {
+                'maxNodes': 12
+            }
+        }
 
     @mock.patch(
         'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
