@@ -430,6 +430,8 @@ def _get_jobs_dict(r: 'row.RowMapping') -> Dict[str, Any]:
         'local_log_file': r.get('local_log_file'),
         'metadata': r.get('metadata'),
         'links': r.get('links'),  # SQLAlchemy JSON type, already parsed
+        # Internal input for the queue's estimated_hourly_cost decoration.
+        'full_resources': r.get('full_resources'),
         # columns from job_info table (some may be None for legacy jobs)
         '_job_info_job_id': r.get(job_info_table.c.spot_job_id
                                  ),  # ambiguous, use table.column

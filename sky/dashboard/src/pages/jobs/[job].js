@@ -64,6 +64,7 @@ import { usePluginComponents } from '@/plugins/PluginProvider';
 import { checkGrafanaAvailability } from '@/utils/grafana';
 import { normalizeUrl, useLogLinkExtractor } from '@/utils/externalLinks';
 import { TelemetrySection } from '@/components/TelemetrySection';
+import { JobEfficiencySummary } from '@/components/JobEfficiencySummary';
 import { hasAccelerator } from '@/utils/gpuUtils';
 import { getInfraContextHref } from '@/utils/infraUtils';
 import { useLogStreamer } from '@/hooks/useLogStreamer';
@@ -1314,6 +1315,7 @@ function JobDetailsContent({
   // Default 'info' tab content
   return (
     <div className="grid grid-cols-2 gap-6">
+      <JobEfficiencySummary job={jobData} tasks={allTasks} />
       <div>
         <div className="text-gray-600 font-medium text-base">Job ID (Name)</div>
         <div className="text-base mt-1 flex items-center gap-2">

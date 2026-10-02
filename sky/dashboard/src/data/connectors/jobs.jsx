@@ -49,6 +49,7 @@ const DEFAULT_FIELDS = [
   'workspace',
   'submitted_at',
   'job_duration',
+  'estimated_hourly_cost',
   'status',
   'resources',
   'cloud',
@@ -63,6 +64,7 @@ const DEFAULT_FIELDS = [
   'failure_reason',
   'user_yaml',
   'entrypoint',
+  'metadata',
   'is_job_group',
   'execution',
   'is_primary_in_job_group',
@@ -293,6 +295,7 @@ export async function getManagedJobs(options = {}) {
         task: job.task_name,
         name: job.job_name,
         job_duration: job.job_duration,
+        estimated_hourly_cost: job.estimated_hourly_cost,
         total_duration: total_duration,
         workspace: job.workspace,
         status: job.status,
@@ -306,6 +309,8 @@ export async function getManagedJobs(options = {}) {
         recoveries: job.recovery_count,
         details: job.details || job.failure_reason,
         user: job.user_name,
+        metadata: job.metadata || {},
+        submitted_by: job.metadata?.submitted_by,
         user_hash: job.user_hash,
         submitted_at: job.submitted_at
           ? new Date(job.submitted_at * 1000)
