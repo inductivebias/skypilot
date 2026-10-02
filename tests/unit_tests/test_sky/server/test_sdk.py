@@ -13,9 +13,11 @@ import click
 import pytest
 import requests
 
+from sky import exceptions
 from sky import skypilot_config
 from sky.client import sdk as client_sdk
 from sky.server import common as server_common
+from sky.server import constants as server_constants
 from sky.server import rest as server_rest
 from sky.server.constants import API_COOKIE_FILE_ENV_VAR
 from sky.utils import common as common_utils
@@ -129,6 +131,48 @@ def test_api_info_with_cookie_file(set_api_cookie_jar):
             assert response["version"] is not None
             assert mock_make_request.call_count == 1
             assert mock_make_request.call_args[0] == ('GET', '/api/health')
+
+
+def test_kubernetes_node_info_sends_exact_custom_resource():
+    selector = {
+        'group': 'compute.coreweave.com',
+        'version': 'v1alpha1',
+        'plural': 'nodepools',
+        'name': 'flourish-h100-spot',
+    }
+    response = mock.Mock(
+        status_code=200,
+        headers={'X-Skypilot-Request-ID': 'request-1'},
+    )
+    with mock.patch('sky.server.common.check_server_healthy_or_start_fn'), \
+         mock.patch('sky.server.versions.get_remote_api_version',
+                    return_value=server_constants.API_VERSION), \
+         mock.patch('sky.server.common.make_authenticated_request',
+                    return_value=response) as make_request:
+        request_id = client_sdk.kubernetes_node_info(context='cks-use06a',
+                                                     custom_resource=selector)
+
+    assert str(request_id) == 'request-1'
+    assert make_request.call_args.args == ('POST', '/kubernetes_node_info')
+    request_body = make_request.call_args.kwargs['json']
+    assert request_body['context'] == 'cks-use06a'
+    assert request_body['custom_resource'] == selector
+
+
+def test_kubernetes_node_info_rejects_custom_resource_for_old_server():
+    with mock.patch('sky.server.common.check_server_healthy_or_start_fn'), \
+         mock.patch('sky.server.versions.get_remote_api_version',
+                    return_value=(server_constants.
+                                  MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION - 1)):
+        with pytest.raises(exceptions.APINotSupportedError,
+                           match='API_VERSION'):
+            client_sdk.kubernetes_node_info(
+                custom_resource={
+                    'group': 'compute.coreweave.com',
+                    'version': 'v1alpha1',
+                    'plural': 'nodepools',
+                    'name': 'flourish-h100-spot',
+                })
 
 
 def test_api_login(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

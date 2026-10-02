@@ -791,6 +791,7 @@ class RealtimeGpuAvailabilityRequestBody(RequestBody):
 class KubernetesNodeInfoRequestBody(RequestBody):
     """The request body for the kubernetes node info endpoint."""
     context: Optional[str] = None
+    custom_resource: Optional[Dict[str, str]] = None
 
 
 class SlurmNodeInfoRequestBody(RequestBody):

@@ -10,7 +10,7 @@ from sky.skylet import constants
 # based on version info is needed.
 # For more details and code guidelines, refer to:
 # https://docs.skypilot.co/en/latest/developers/CONTRIBUTING.html#backward-compatibility-guidelines
-API_VERSION = 57  # managed job infrastructure/node-history filters
+API_VERSION = 58  # optional Kubernetes custom-resource snapshot
 
 # The minimum peer API version that the code should still work with.
 # Notes (dev):
@@ -82,6 +82,10 @@ MIN_WAITING_STATUS_API_VERSION = 55
 # Minimum API version that supports managed-job filtering by infrastructure,
 # persisted node names, and fully finished unique jobs.
 MIN_JOB_NODE_HISTORY_API_VERSION = 57
+
+# Minimum API version that can include one exact custom resource in the
+# Kubernetes node-info snapshot.
+MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION = 58
 
 # Prefix for API request names.
 REQUEST_NAME_PREFIX = 'sky.'

@@ -756,11 +756,13 @@ async def realtime_kubernetes_gpu_availability(
 @annotations.client_api
 async def kubernetes_node_info(
     context: Optional[str] = None,
-    stream_logs: Optional[StreamConfig] = DEFAULT_STREAM_CONFIG
+    stream_logs: Optional[StreamConfig] = DEFAULT_STREAM_CONFIG,
+    custom_resource: Optional[Dict[str, str]] = None,
 ) -> 'models.KubernetesNodesInfo':
     """Async version of kubernetes_node_info() that gets the resource
     information for all the nodes in the cluster."""
-    request_id = await asyncio.to_thread(sdk.kubernetes_node_info, context)
+    request_id = await asyncio.to_thread(sdk.kubernetes_node_info, context,
+                                         custom_resource)
     if stream_logs is not None:
         return await _stream_and_get(request_id, stream_logs)
     else:

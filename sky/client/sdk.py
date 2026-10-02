@@ -2306,7 +2306,8 @@ def realtime_kubernetes_gpu_availability(
 @server_common.check_server_healthy_or_start
 @annotations.client_api
 def kubernetes_node_info(
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    custom_resource: Optional[Dict[str, str]] = None,
 ) -> server_common.RequestId['models.KubernetesNodesInfo']:
     """Gets the resource information for all the nodes in the cluster.
 
@@ -2319,6 +2320,9 @@ def kubernetes_node_info(
 
     Args:
         context: The Kubernetes context. If None, the default context is used.
+        custom_resource: Optional exact cluster-scoped custom resource to read
+            in the same server-side snapshot. The dictionary must contain
+            ``group``, ``version``, ``plural``, and ``name``.
 
     Returns:
         The request ID of the Kubernetes node info request.
@@ -2327,7 +2331,18 @@ def kubernetes_node_info(
         KubernetesNodesInfo: A model that contains the node info map and other
             information.
     """
-    body = payloads.KubernetesNodeInfoRequestBody(context=context)
+    if custom_resource is not None:
+        remote_api_version = versions.get_remote_api_version()
+        if (remote_api_version is None or remote_api_version <
+                server_constants.MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION):
+            with ux_utils.print_exception_no_traceback():
+                raise exceptions.APINotSupportedError(
+                    'Kubernetes custom-resource snapshots require an API '
+                    'server with API_VERSION >= '
+                    f'{server_constants.MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION}.'
+                )
+    body = payloads.KubernetesNodeInfoRequestBody(
+        context=context, custom_resource=custom_resource)
     response = server_common.make_authenticated_request(
         'POST',
         '/kubernetes_node_info',
