@@ -77,6 +77,13 @@ class TestUpdateFields:
         assert 'last_recovered_at' in updated_fields
         assert 'end_at' in updated_fields
 
+    def test_adds_dependencies_for_estimated_hourly_cost(self):
+        fields = ['estimated_hourly_cost']
+        updated_fields, _ = jobs_utils._update_fields(fields)
+        assert 'estimated_hourly_cost' not in updated_fields
+        assert 'full_resources' in updated_fields
+        assert 'resources' in updated_fields
+
     def test_adds_task_name_when_job_name_present(self):
         """Test that task_name is added when job_name is present."""
         fields = ['job_name']
@@ -196,6 +203,38 @@ class TestUpdateFields:
         assert cluster_handle_required is False
         for field in ('cloud', 'region', 'zone', 'resources'):
             assert field not in updated_fields
+
+
+def test_get_estimated_hourly_cost_multinode_returns_allocation_rate(
+        monkeypatch: pytest.MonkeyPatch):
+
+    class PricedResource:
+
+        def get_cost(self, seconds: float) -> float:
+            assert seconds == 3600
+            return 2.5
+
+    monkeypatch.setattr(jobs_utils.resources_lib.Resources, 'from_yaml_config',
+                        lambda _: {PricedResource()})
+
+    assert jobs_utils._get_estimated_hourly_cost(  # pylint: disable=protected-access
+        {'accelerators': 'A100:1'}, '3x[A100:1]') == 7.5
+
+
+def test_get_estimated_hourly_cost_unpriced_returns_none(
+        monkeypatch: pytest.MonkeyPatch):
+
+    class UnpricedResource:
+
+        def get_cost(self, seconds: float) -> float:
+            assert seconds == 3600
+            return 0
+
+    monkeypatch.setattr(jobs_utils.resources_lib.Resources, 'from_yaml_config',
+                        lambda _: {UnpricedResource()})
+
+    assert jobs_utils._get_estimated_hourly_cost(  # pylint: disable=protected-access
+        {'accelerators': 'UNKNOWN:1'}, '1x[UNKNOWN:1]') is None
 
 
 class TestGetManagedJobQueue:
@@ -546,6 +585,30 @@ class TestGetManagedJobQueue:
 
         assert 'jobs' in result
         assert len(result['jobs']) == 1
+
+    def test_estimated_hourly_cost_field_is_derived_without_leaking_resources(
+            self, monkeypatch: pytest.MonkeyPatch):
+
+        class PricedResource:
+
+            def get_cost(self, seconds: float) -> float:
+                assert seconds == 3600
+                return 3.5
+
+        jobs = [
+            self._make_test_job(1,
+                                resources='2x[A100:1]',
+                                full_resources={'accelerators': 'A100:1'})
+        ]
+        self._patch_managed_job_state(monkeypatch, jobs)
+        monkeypatch.setattr(jobs_utils.resources_lib.Resources,
+                            'from_yaml_config', lambda _: {PricedResource()})
+
+        result = jobs_utils.get_managed_job_queue(
+            fields=['estimated_hourly_cost'])
+
+        assert result['jobs'][0]['estimated_hourly_cost'] == 7
+        assert 'full_resources' not in result['jobs'][0]
 
     def test_schedule_state_none_when_not_in_fields(self, monkeypatch):
         """Test that schedule_state is None when not requested in fields."""
