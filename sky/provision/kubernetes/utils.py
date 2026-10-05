@@ -4276,6 +4276,88 @@ def _get_custom_resource(
     )
 
 
+def _gke_total_node_bound(node_pool: Dict[str, Any], field: str) -> int:
+    """Return a GKE node-pool autoscaling bound as a total node count."""
+    autoscaling = node_pool.get('autoscaling', {})
+    total_field = f'total{field[0].upper()}{field[1:]}NodeCount'
+    if total_field in autoscaling:
+        value = autoscaling[total_field]
+    else:
+        value = autoscaling.get(f'{field}NodeCount', 0)
+        value *= max(1, len(node_pool.get('locations', [])))
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f'GKE {field} node count must be non-negative')
+    return value
+
+
+def _get_gke_autoscaling_capacity(
+        context: str,
+        nodes: List[Any]) -> List[models.KubernetesAutoscalingCapacity]:
+    """Read live bounds for every autoscaled GKE accelerator node pool."""
+    valid, project_id, location, cluster_name = (
+        GKEAutoscaler._validate_context_name(  # pylint: disable=protected-access
+            context))
+    if not valid:
+        return []
+    try:
+        container_service = gcp.build('container',
+                                      'v1',
+                                      credentials=None,
+                                      cache_discovery=False)
+        cluster = container_service.projects().locations().clusters().get(
+            name=f'projects/{project_id}/locations/{location}/clusters/'
+            f'{cluster_name}').execute()
+    except ImportError:
+        logger.debug('GCP dependencies unavailable; omitting GKE capacity')
+        return []
+    except Exception as error:  # pylint: disable=broad-except
+        # Capacity decoration is optional and must not make the underlying
+        # Kubernetes inventory unavailable when GKE metadata cannot be read.
+        logger.debug('GKE autoscaling capacity unavailable: %s',
+                     error,
+                     exc_info=True)
+        return []
+
+    current_nodes = collections.Counter(
+        node.metadata.labels.get('cloud.google.com/gke-nodepool')
+        for node in nodes)
+    capacities = []
+    for node_pool in cluster.get('nodePools', []):
+        if node_pool.get('autoscaling', {}).get('enabled') is not True:
+            continue
+        accelerators = node_pool.get('config', {}).get('accelerators', [])
+        if len(accelerators) != 1:
+            continue
+        accelerator = accelerators[0]
+        accelerator_type = accelerator.get('acceleratorType')
+        try:
+            accelerators_per_node = int(accelerator.get('acceleratorCount', 0))
+            min_nodes = _gke_total_node_bound(node_pool, 'min')
+            max_nodes = _gke_total_node_bound(node_pool, 'max')
+        except (TypeError, ValueError):
+            logger.debug('Ignoring malformed GKE autoscaling bounds for %s',
+                         node_pool.get('name', '<unnamed>'))
+            continue
+        if (not accelerator_type or accelerators_per_node <= 0 or
+                max_nodes < min_nodes):
+            continue
+        name = node_pool.get('name')
+        if not isinstance(name, str) or not name:
+            continue
+        capacities.append(
+            models.KubernetesAutoscalingCapacity(
+                node_pool=name,
+                accelerator_type=(
+                    GKELabelFormatter.get_accelerator_from_label_value(
+                        accelerator_type)),
+                accelerators_per_node=accelerators_per_node,
+                current_nodes=current_nodes[name],
+                min_nodes=min_nodes,
+                max_nodes=max_nodes,
+            ))
+    return capacities
+
+
 def get_kubernetes_node_info(
     context: Optional[str] = None,
     custom_resource: Optional[Dict[str,
@@ -4528,6 +4610,7 @@ def get_kubernetes_node_info(
         node_info_dict=node_info_dict,
         hint=hint,
         custom_resource=_get_custom_resource(context, custom_resource),
+        autoscaling_capacity=_get_gke_autoscaling_capacity(context, nodes),
     )
 
 

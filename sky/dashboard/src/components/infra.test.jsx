@@ -213,6 +213,32 @@ it('renders one gray segment per unallocated autoscaling node', () => {
   expect(screen.getByTitle('72 allocated')).toHaveStyle({ width: '45%' });
 });
 
+it('renders heterogeneous autoscaling pools as one segment per node', () => {
+  render(
+    <GpuTypeSummaryStrip
+      gpus={[
+        {
+          gpu_name: 'A100',
+          gpu_total: 21,
+          gpu_free: 1,
+          gpu_not_ready: 0,
+          gpu_min: 4,
+          gpu_max: 42,
+          gpu_headroom_node_sizes: [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
+          ],
+        },
+      ]}
+    />
+  );
+
+  expect(screen.getByText('4 min · 42 max')).toBeInTheDocument();
+  const unallocatedNodes = screen.getAllByTitle(/Unallocated node/);
+  expect(unallocatedNodes).toHaveLength(15);
+  expect(unallocatedNodes[0]).toHaveStyle({ width: `${(1 / 42) * 100}%` });
+  expect(unallocatedNodes[14]).toHaveStyle({ width: `${(2 / 42) * 100}%` });
+});
+
 it('renders one unified per-context table without a Requestable column', () => {
   const context = 'ssh-deploy-lambda-1';
   const gpu = {

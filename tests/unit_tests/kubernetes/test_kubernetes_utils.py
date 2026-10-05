@@ -630,6 +630,127 @@ def test_gke_autoscaler_matches_rtxpro6000_node_pool():
         node_pool_accelerators, 'RTXPRO6000', 8)
 
 
+def test_gke_autoscaling_capacity_reads_all_enabled_gpu_pools():
+    cluster = {
+        'nodePools': [{
+            'name': 'a100-1',
+            'autoscaling': {
+                'enabled': True,
+                'totalMaxNodeCount': 10,
+            },
+            'config': {
+                'accelerators': [{
+                    'acceleratorType': 'nvidia-tesla-a100',
+                    'acceleratorCount': '1',
+                }],
+            },
+        }, {
+            'name': 'a100-2',
+            'autoscaling': {
+                'enabled': True,
+                'totalMinNodeCount': 1,
+                'totalMaxNodeCount': 10,
+            },
+            'config': {
+                'accelerators': [{
+                    'acceleratorType': 'nvidia-tesla-a100',
+                    'acceleratorCount': '2',
+                }],
+            },
+        }, {
+            'name': 'fixed-gpu',
+            'autoscaling': {
+                'enabled': False,
+            },
+            'config': {
+                'accelerators': [{
+                    'acceleratorType': 'nvidia-tesla-a100',
+                    'acceleratorCount': '4',
+                }],
+            },
+        }, {
+            'name': 'cpu-only',
+            'autoscaling': {
+                'enabled': True,
+                'totalMaxNodeCount': 5,
+            },
+            'config': {},
+        }]
+    }
+    service = mock.MagicMock()
+    service.projects().locations().clusters().get(
+    ).execute.return_value = cluster
+    nodes = []
+    for pool in ('a100-1', 'a100-2', 'a100-2'):
+        node = mock.MagicMock()
+        node.metadata.labels = {'cloud.google.com/gke-nodepool': pool}
+        nodes.append(node)
+
+    with mock.patch('sky.provision.kubernetes.utils.gcp.build',
+                    return_value=service):
+        capacities = utils._get_gke_autoscaling_capacity(
+            'gke_project_us-central1-a_cluster', nodes)
+
+    assert [capacity.to_dict() for capacity in capacities] == [{
+        'node_pool': 'a100-1',
+        'accelerator_type': 'A100',
+        'accelerators_per_node': 1,
+        'current_nodes': 1,
+        'min_nodes': 0,
+        'max_nodes': 10,
+    }, {
+        'node_pool': 'a100-2',
+        'accelerator_type': 'A100',
+        'accelerators_per_node': 2,
+        'current_nodes': 2,
+        'min_nodes': 1,
+        'max_nodes': 10,
+    }]
+
+
+def test_gke_autoscaling_capacity_rereads_live_maximum():
+
+    def cluster(max_nodes):
+        return {
+            'nodePools': [{
+                'name': 'a100',
+                'autoscaling': {
+                    'enabled': True,
+                    'totalMaxNodeCount': max_nodes,
+                },
+                'config': {
+                    'accelerators': [{
+                        'acceleratorType': 'nvidia-tesla-a100',
+                        'acceleratorCount': '1',
+                    }],
+                },
+            }]
+        }
+
+    service = mock.MagicMock()
+    execute = service.projects().locations().clusters().get().execute
+    execute.side_effect = [cluster(10), cluster(20)]
+
+    with mock.patch('sky.provision.kubernetes.utils.gcp.build',
+                    return_value=service):
+        first = utils._get_gke_autoscaling_capacity(
+            'gke_project_us-central1-a_cluster', [])
+        second = utils._get_gke_autoscaling_capacity(
+            'gke_project_us-central1-a_cluster', [])
+
+    assert first[0].max_nodes == 10
+    assert second[0].max_nodes == 20
+
+
+def test_gke_autoscaling_capacity_backend_error_returns_empty():
+    with mock.patch('sky.provision.kubernetes.utils.gcp.build',
+                    side_effect=RuntimeError('offline')):
+        capacities = utils._get_gke_autoscaling_capacity(
+            'gke_project_us-central1-a_cluster', [])
+
+    assert capacities == []
+
+
 def test_detect_gpu_label_formatter_suppresses_warning_for_coreweave_format():
     """Tests that warnings are not logged when GKE label keys have
     CoreWeave-formatted values (e.g., cloud.google.com/gke-accelerator=H100_NVLINK_80GB).

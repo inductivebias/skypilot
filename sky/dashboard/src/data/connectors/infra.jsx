@@ -440,7 +440,7 @@ export async function getWorkspaceContexts() {
 // Returns processed GPU data for one context that can be merged into state
 export async function getContextGPUData(context) {
   try {
-    const { nodeInfoDict, customResource } =
+    const { nodeInfoDict, customResource, autoscalingCapacity } =
       await getKubernetesPerNodeGPUs(context);
 
     // Process node info into GPU summaries
@@ -497,6 +497,52 @@ export async function getContextGPUData(context) {
     }
 
     const perContextGPUs = Object.values(gpuToData);
+    autoscalingCapacity.forEach((capacity) => {
+      const gpuName = capacity?.accelerator_type;
+      const gpusPerNode = capacity?.accelerators_per_node;
+      const currentNodes = capacity?.current_nodes;
+      const minNodes = capacity?.min_nodes;
+      const maxNodes = capacity?.max_nodes;
+      if (
+        typeof gpuName !== 'string' ||
+        !Number.isInteger(gpusPerNode) ||
+        gpusPerNode <= 0 ||
+        !Number.isInteger(currentNodes) ||
+        !Number.isInteger(minNodes) ||
+        !Number.isInteger(maxNodes) ||
+        Math.min(currentNodes, minNodes, maxNodes) < 0 ||
+        maxNodes < minNodes
+      ) {
+        return;
+      }
+      if (!gpuToData[gpuName]) {
+        gpuToData[gpuName] = {
+          gpu_name: gpuName,
+          gpu_requestable_qty_per_node: gpusPerNode,
+          gpu_total: 0,
+          gpu_free: 0,
+          gpu_not_ready: 0,
+          context: context,
+        };
+        perContextGPUs.push(gpuToData[gpuName]);
+      }
+      const gpu = gpuToData[gpuName];
+      gpu.gpu_min ??= gpu.gpu_total;
+      gpu.gpu_max ??= gpu.gpu_total;
+      gpu.gpu_headroom_node_sizes ??= [];
+      gpu.gpu_min += (minNodes - currentNodes) * gpusPerNode;
+      gpu.gpu_max += (maxNodes - currentNodes) * gpusPerNode;
+      for (let index = currentNodes; index < maxNodes; index += 1) {
+        gpu.gpu_headroom_node_sizes.push(gpusPerNode);
+      }
+    });
+    perContextGPUs.forEach((gpu) => {
+      if (Number.isFinite(gpu.gpu_min) && Number.isFinite(gpu.gpu_max)) {
+        gpu.gpu_min = Math.max(0, gpu.gpu_min);
+        gpu.gpu_max = Math.max(gpu.gpu_total, gpu.gpu_max);
+      }
+    });
+
     const minNodes = customResource?.spec?.minNodes;
     const maxNodes = customResource?.spec?.maxNodes;
     if (
@@ -511,6 +557,12 @@ export async function getContextGPUData(context) {
       if (gpusPerNode > 0) {
         gpu.gpu_min = minNodes * gpusPerNode;
         gpu.gpu_max = maxNodes * gpusPerNode;
+        const currentNodes = gpu.gpu_total / gpusPerNode;
+        if (Number.isInteger(currentNodes)) {
+          gpu.gpu_headroom_node_sizes = Array(
+            Math.max(0, maxNodes - currentNodes)
+          ).fill(gpusPerNode);
+        }
       }
     }
 
@@ -786,6 +838,7 @@ async function getKubernetesPerNodeGPUs(context) {
     return {
       nodeInfoDict: nodeInfo['node_info_dict'] || {},
       customResource: nodeInfo['custom_resource'] || null,
+      autoscalingCapacity: nodeInfo['autoscaling_capacity'] || [],
     };
   } catch (error) {
     console.warn(
