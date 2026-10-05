@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import { JobEfficiencySummary } from '@/components/JobEfficiencySummary';
 import { useJobEfficiencyMetrics } from '@/data/connectors/jobs';
@@ -46,5 +46,42 @@ describe('JobEfficiencySummary', () => {
     expect(screen.getByText('SM active')).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument();
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0);
+
+    const toggle = screen.getByRole('button', {
+      name: /Efficiency summary/i,
+    });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('SM active')).not.toBeInTheDocument();
+  });
+
+  it('marks GPU hardware metrics as not applicable for CPU-only jobs', () => {
+    useJobEfficiencyMetrics.mockReturnValue({
+      available: false,
+      progress: {},
+      hardware: {},
+    });
+
+    render(
+      <JobEfficiencySummary
+        job={{
+          name: 'cpu-job-a1.alex',
+          user: 'root',
+          requested_resources: '1x[CPU:4]',
+          job_duration: 3600,
+        }}
+        tasks={[]}
+      />
+    );
+
+    expect(screen.getByText('GPU-hours')).toBeInTheDocument();
+    expect(screen.getByText('0.000')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'GPU hardware metrics are not applicable to CPU-only jobs.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText('SM active')).not.toBeInTheDocument();
   });
 });

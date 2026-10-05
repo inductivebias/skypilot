@@ -403,6 +403,8 @@ function JobDetails() {
               </Card>
             </div>
 
+            <JobEfficiencySummary job={enhancedJobData} tasks={allTasks} />
+
             {/* Tasks Section - only show for multi-task jobs */}
             {isMultiTask && (
               <div id="tasks-section" className="mt-6">
@@ -1315,7 +1317,6 @@ function JobDetailsContent({
   // Default 'info' tab content
   return (
     <div className="grid grid-cols-2 gap-6">
-      <JobEfficiencySummary job={jobData} tasks={allTasks} />
       <div>
         <div className="text-gray-600 font-medium text-base">Job ID (Name)</div>
         <div className="text-base mt-1 flex items-center gap-2">

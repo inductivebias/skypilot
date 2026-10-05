@@ -1,7 +1,9 @@
+import { useState } from 'react';
+import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import PropTypes from 'prop-types';
 
 import { useJobEfficiencyMetrics } from '@/data/connectors/jobs';
-import { getJobEfficiencySummary } from '@/utils/jobEfficiency';
+import { getGpuCount, getJobEfficiencySummary } from '@/utils/jobEfficiency';
 
 const HARDWARE_ROWS = [
   ['SM active', 'sm_active_percent', 'percent'],
@@ -68,99 +70,127 @@ Metric.propTypes = {
 };
 
 export function JobEfficiencySummary({ job, tasks = [] }) {
+  const [isExpanded, setIsExpanded] = useState(true);
   const summary = getJobEfficiencySummary(job, tasks);
   const telemetry = useJobEfficiencyMetrics(job, tasks);
   const progress = telemetry.progress || {};
+  const records = tasks.length > 0 ? tasks : [job];
+  const isGpuJob = records.some((record) => getGpuCount(record) > 0);
   return (
-    <div className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-3">
-        <div className="font-semibold text-slate-900">Efficiency summary</div>
-        <div className="text-xs text-slate-500">
-          Allocation usage; estimated cost excludes storage, networking, and
-          shared overhead.
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <button
+        type="button"
+        aria-controls="job-efficiency-summary-content"
+        aria-expanded={isExpanded}
+        className="flex w-full items-start justify-between gap-4 text-left"
+        onClick={() => setIsExpanded((expanded) => !expanded)}
+      >
+        <div>
+          <div className="font-semibold text-slate-900">Efficiency summary</div>
+          <div className="text-xs text-slate-500">
+            Allocation usage; estimated cost excludes storage, networking, and
+            shared overhead.
+          </div>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Metric
-          label="Estimated cost"
-          value={formatUsd(summary.estimatedCost)}
-          title="Runtime multiplied by configured allocation price"
-        />
-        <Metric
-          label="GPU-hours"
-          value={formatGpuHours(summary.gpuHours)}
-          title="Allocated GPUs multiplied by active job duration"
-        />
-        <Metric label="Restarts" value={summary.restarts} />
-        <Metric
-          label="Submitted by"
-          value={summary.submittedBy}
-          title={summary.submittedBy}
-        />
-      </div>
-      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <Metric
-          label="Steps/second"
-          value={formatNumber(progress.steps_per_second)}
-        />
-        <Metric
-          label="FLOPs"
-          value={
-            progress.flops_per_second == null
-              ? 'N/A'
-              : `${formatNumber(progress.flops_per_second / 1e12)} TFLOP/s`
-          }
-          title="Reported steps/second multiplied by explicit model FLOPs per global step"
-        />
-        <Metric
-          label="MFU"
-          value={
-            progress.mfu_percent == null
-              ? 'N/A'
-              : `${formatNumber(progress.mfu_percent, 1)}%`
-          }
-          title="FLOP/s divided by explicit per-GPU peak FLOP/s and allocated GPU count"
-        />
-      </div>
-      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium">Hardware</th>
-              {PERCENTILES.map((percentile) => (
-                <th
-                  key={percentile}
-                  className="px-3 py-2 text-right font-medium"
-                >
-                  {percentile.toUpperCase()}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {HARDWARE_ROWS.map(([label, key, unit]) => (
-              <tr key={key}>
-                <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-700">
-                  {label}
-                </td>
-                {PERCENTILES.map((percentile) => (
-                  <td
-                    key={percentile}
-                    className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-700"
-                  >
-                    {telemetry.hardware?.[key]?.[percentile] == null
-                      ? 'N/A'
-                      : formatHardware(
-                          telemetry.hardware[key][percentile],
-                          unit
-                        )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        {isExpanded ? (
+          <ChevronDownIcon className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" />
+        ) : (
+          <ChevronRightIcon className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" />
+        )}
+      </button>
+      {isExpanded && (
+        <div id="job-efficiency-summary-content" className="mt-3">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Metric
+              label="Estimated cost"
+              value={formatUsd(summary.estimatedCost)}
+              title="Runtime multiplied by configured allocation price"
+            />
+            <Metric
+              label="GPU-hours"
+              value={formatGpuHours(summary.gpuHours)}
+              title="Allocated GPUs multiplied by active job duration"
+            />
+            <Metric label="Restarts" value={summary.restarts} />
+            <Metric
+              label="Submitted by"
+              value={summary.submittedBy}
+              title={summary.submittedBy}
+            />
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <Metric
+              label="Steps/second"
+              value={formatNumber(progress.steps_per_second)}
+            />
+            <Metric
+              label="FLOPs"
+              value={
+                progress.flops_per_second == null
+                  ? 'N/A'
+                  : `${formatNumber(progress.flops_per_second / 1e12)} TFLOP/s`
+              }
+              title="Reported steps/second multiplied by explicit model FLOPs per global step"
+            />
+            <Metric
+              label="MFU"
+              value={
+                progress.mfu_percent == null
+                  ? 'N/A'
+                  : `${formatNumber(progress.mfu_percent, 1)}%`
+              }
+              title="FLOP/s divided by explicit per-GPU peak FLOP/s and allocated GPU count"
+            />
+          </div>
+          {isGpuJob ? (
+            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">
+                      Hardware
+                    </th>
+                    {PERCENTILES.map((percentile) => (
+                      <th
+                        key={percentile}
+                        className="px-3 py-2 text-right font-medium"
+                      >
+                        {percentile.toUpperCase()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {HARDWARE_ROWS.map(([label, key, unit]) => (
+                    <tr key={key}>
+                      <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-700">
+                        {label}
+                      </td>
+                      {PERCENTILES.map((percentile) => (
+                        <td
+                          key={percentile}
+                          className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-700"
+                        >
+                          {telemetry.hardware?.[key]?.[percentile] == null
+                            ? 'N/A'
+                            : formatHardware(
+                                telemetry.hardware[key][percentile],
+                                unit
+                              )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+              GPU hardware metrics are not applicable to CPU-only jobs.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
