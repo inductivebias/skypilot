@@ -170,6 +170,7 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       capacity_min: 0,
       capacity_max: 0,
       has_capacity_bounds: false,
+      gpus_per_node: undefined,
     };
     const gpuTotal = gpu.gpu_total || 0;
     const hasCapacityBounds =
@@ -180,6 +181,14 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
     summary.capacity_min += hasCapacityBounds ? gpu.gpu_min : gpuTotal;
     summary.capacity_max += hasCapacityBounds ? gpu.gpu_max : gpuTotal;
     summary.has_capacity_bounds ||= hasCapacityBounds;
+    const gpusPerNode = gpu.gpu_requestable_qty_per_node;
+    if (hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0) {
+      if (summary.gpus_per_node === undefined) {
+        summary.gpus_per_node = gpusPerNode;
+      } else if (summary.gpus_per_node !== gpusPerNode) {
+        summary.gpus_per_node = null;
+      }
+    }
     gpuSummary.set(gpuName, summary);
   });
 
@@ -188,11 +197,17 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       capacity_min: capacityMin,
       capacity_max: capacityMax,
       has_capacity_bounds: hasCapacityBounds,
+      gpus_per_node: gpusPerNode,
       ...gpu
     } = summary;
-    return hasCapacityBounds
-      ? { ...gpu, gpu_min: capacityMin, gpu_max: capacityMax }
-      : gpu;
+    const capacity = hasCapacityBounds
+      ? { gpu_min: capacityMin, gpu_max: capacityMax }
+      : {};
+    const nodeSize =
+      hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0
+        ? { gpu_requestable_qty_per_node: gpusPerNode }
+        : {};
+    return { ...gpu, ...capacity, ...nodeSize };
   });
 }
 
@@ -258,12 +273,19 @@ const CleanUtilizationBar = ({
   const free = gpu?.gpu_free || 0;
   const used = Math.max(0, total - free - notReady);
   const headroom = Math.max(0, capacity - total);
+  const gpusPerNode = gpu?.gpu_requestable_qty_per_node;
+  const unallocatedNodeCount =
+    Number.isFinite(gpusPerNode) &&
+    gpusPerNode > 0 &&
+    Number.isInteger(headroom / gpusPerNode)
+      ? headroom / gpusPerNode
+      : 0;
   const valueByKey = { used, notReady, free, headroom };
   const pct = (v) => (capacity > 0 ? (v / capacity) * 100 : 0);
   // Each segment carries its own tooltip so hover reports exactly the
   // segment under the cursor ("552 used"), not a whole-bar summary. Dark
   // tooltip (gray-800/white) for contrast against the segment colors.
-  const segment = (value, label, colorClass) =>
+  const segment = (value, label, colorClass, title, className = '') =>
     value > 0 ? (
       <Tooltip
         placement="top"
@@ -274,9 +296,9 @@ const CleanUtilizationBar = ({
         }
       >
         <div
-          className={`${colorClass} h-full cursor-pointer hover:opacity-80`}
+          className={`${colorClass} h-full cursor-pointer hover:opacity-80 ${className}`.trim()}
           style={{ width: `${pct(value)}%` }}
-          title={`${value.toLocaleString()} ${label}`}
+          title={title || `${value.toLocaleString()} ${label}`}
         />
       </Tooltip>
     ) : null;
@@ -285,9 +307,23 @@ const CleanUtilizationBar = ({
       className={`bg-gray-200/70 flex overflow-hidden ${heightClass} ${roundedClass} ${className}`.trim()}
     >
       {/* Occupied capacity reads from the left; free is always rightmost. */}
-      {GPU_UTILIZATION_STATES.map((s) => {
+      {GPU_UTILIZATION_STATES.flatMap((s) => {
+        if (s.key === 'headroom' && unallocatedNodeCount > 0) {
+          return Array.from({ length: unallocatedNodeCount }, (_, index) =>
+            React.cloneElement(
+              segment(
+                gpusPerNode,
+                s.label,
+                s.colorClass,
+                `Unallocated node ${index + 1} of ${unallocatedNodeCount} (${gpusPerNode.toLocaleString()} GPUs)`,
+                'border-l border-gray-100'
+              ),
+              { key: `${s.key}-${index}` }
+            )
+          );
+        }
         const el = segment(valueByKey[s.key], s.label, s.colorClass);
-        return el ? React.cloneElement(el, { key: s.key }) : null;
+        return el ? [React.cloneElement(el, { key: s.key })] : [];
       })}
     </div>
   );
@@ -762,7 +798,13 @@ export function InfrastructureSection({
       }
       byType.set(name, prev);
     });
-    const typeAgg = Array.from(byType.values());
+    const typeAgg = Array.from(byType.values()).map((gpu) => {
+      if (gpu.requestableQtys.size !== 1) return gpu;
+      return {
+        ...gpu,
+        gpu_requestable_qty_per_node: Array.from(gpu.requestableQtys)[0],
+      };
+    });
 
     const contextStatsKey = buildContextStatsKey(context, { isSSH, isSlurm });
     const stats = contextStats[contextStatsKey] || { clusters: 0, jobs: 0 };

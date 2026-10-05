@@ -149,6 +149,7 @@ describe('aggregateGPUsForContexts', () => {
           gpu_not_ready: 0,
           gpu_min: 64,
           gpu_max: 160,
+          gpu_requestable_qty_per_node: 8,
         },
         {
           context: 'fixed-context',
@@ -166,6 +167,7 @@ describe('aggregateGPUsForContexts', () => {
         gpu_not_ready: 0,
         gpu_min: 72,
         gpu_max: 168,
+        gpu_requestable_qty_per_node: 8,
       },
     ]);
   });
@@ -186,27 +188,29 @@ it('renders GPU counts with free green, allocated yellow, and not ready red', ()
   expect(screen.getByTitle('8 not ready')).toHaveClass('bg-red-600');
 });
 
-it('renders autoscaling bounds and unallocated headroom in gray', () => {
+it('renders one gray segment per unallocated autoscaling node', () => {
   render(
     <GpuTypeSummaryStrip
       gpus={[
         {
           gpu_name: 'H100',
-          gpu_total: 64,
+          gpu_total: 72,
           gpu_free: 0,
           gpu_not_ready: 0,
           gpu_min: 64,
           gpu_max: 160,
+          gpu_requestable_qty_per_node: 8,
         },
       ]}
     />
   );
 
   expect(screen.getByText('64 min · 160 max')).toBeInTheDocument();
-  expect(screen.getByTitle('96 autoscaling headroom')).toHaveClass(
-    'bg-gray-400'
-  );
-  expect(screen.getByTitle('64 allocated')).toHaveStyle({ width: '40%' });
+  const unallocatedNodes = screen.getAllByTitle(/Unallocated node/);
+  expect(unallocatedNodes).toHaveLength(11);
+  expect(unallocatedNodes[0]).toHaveClass('bg-gray-400');
+  expect(unallocatedNodes[0]).toHaveStyle({ width: '5%' });
+  expect(screen.getByTitle('72 allocated')).toHaveStyle({ width: '45%' });
 });
 
 it('renders one unified per-context table without a Requestable column', () => {
