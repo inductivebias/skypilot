@@ -520,12 +520,8 @@ export async function getContextGPUData(context) {
       const gpu = gpuToData[gpuName];
       gpu.gpu_min ??= gpu.gpu_total;
       gpu.gpu_max ??= gpu.gpu_total;
-      gpu.gpu_headroom_node_sizes ??= [];
       gpu.gpu_min += (minNodes - currentNodes) * gpusPerNode;
       gpu.gpu_max += (maxNodes - currentNodes) * gpusPerNode;
-      for (let index = currentNodes; index < maxNodes; index += 1) {
-        gpu.gpu_headroom_node_sizes.push(gpusPerNode);
-      }
     });
     perContextGPUs.forEach((gpu) => {
       if (Number.isFinite(gpu.gpu_min) && Number.isFinite(gpu.gpu_max)) {

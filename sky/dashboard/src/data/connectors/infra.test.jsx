@@ -142,7 +142,6 @@ describe('getContextGPUData', () => {
         gpu_free: 3,
         gpu_min: 4,
         gpu_max: 42,
-        gpu_headroom_node_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2],
       }),
     ]);
   });

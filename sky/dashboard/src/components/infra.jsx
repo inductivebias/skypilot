@@ -171,8 +171,6 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       capacity_max: 0,
       has_capacity_bounds: false,
       gpus_per_node: undefined,
-      headroom_node_sizes: [],
-      has_headroom_node_sizes: false,
     };
     const gpuTotal = gpu.gpu_total || 0;
     const hasCapacityBounds =
@@ -183,10 +181,6 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
     summary.capacity_min += hasCapacityBounds ? gpu.gpu_min : gpuTotal;
     summary.capacity_max += hasCapacityBounds ? gpu.gpu_max : gpuTotal;
     summary.has_capacity_bounds ||= hasCapacityBounds;
-    if (Array.isArray(gpu.gpu_headroom_node_sizes)) {
-      summary.headroom_node_sizes.push(...gpu.gpu_headroom_node_sizes);
-      summary.has_headroom_node_sizes = true;
-    }
     const gpusPerNode = gpu.gpu_requestable_qty_per_node;
     if (hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0) {
       if (summary.gpus_per_node === undefined) {
@@ -204,8 +198,6 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       capacity_max: capacityMax,
       has_capacity_bounds: hasCapacityBounds,
       gpus_per_node: gpusPerNode,
-      headroom_node_sizes: headroomNodeSizes,
-      has_headroom_node_sizes: hasHeadroomNodeSizes,
       ...gpu
     } = summary;
     const capacity = hasCapacityBounds
@@ -215,10 +207,7 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0
         ? { gpu_requestable_qty_per_node: gpusPerNode }
         : {};
-    const nodeSegments = hasHeadroomNodeSizes
-      ? { gpu_headroom_node_sizes: headroomNodeSizes }
-      : {};
-    return { ...gpu, ...capacity, ...nodeSize, ...nodeSegments };
+    return { ...gpu, ...capacity, ...nodeSize };
   });
 }
 
@@ -284,32 +273,12 @@ const CleanUtilizationBar = ({
   const free = gpu?.gpu_free || 0;
   const used = Math.max(0, total - free - notReady);
   const headroom = Math.max(0, capacity - total);
-  const gpusPerNode = gpu?.gpu_requestable_qty_per_node;
-  const homogeneousNodeCount =
-    Number.isFinite(gpusPerNode) &&
-    gpusPerNode > 0 &&
-    Number.isInteger(headroom / gpusPerNode)
-      ? headroom / gpusPerNode
-      : 0;
-  const configuredNodeSizes = Array.isArray(gpu?.gpu_headroom_node_sizes)
-    ? gpu.gpu_headroom_node_sizes.filter(
-        (size) => Number.isFinite(size) && size > 0
-      )
-    : [];
-  const configuredHeadroom = configuredNodeSizes.reduce(
-    (sum, size) => sum + size,
-    0
-  );
-  const headroomNodeSizes =
-    configuredNodeSizes.length > 0 && configuredHeadroom === headroom
-      ? configuredNodeSizes
-      : Array(homogeneousNodeCount).fill(gpusPerNode);
   const valueByKey = { used, notReady, free, headroom };
   const pct = (v) => (capacity > 0 ? (v / capacity) * 100 : 0);
   // Each segment carries its own tooltip so hover reports exactly the
   // segment under the cursor ("552 used"), not a whole-bar summary. Dark
   // tooltip (gray-800/white) for contrast against the segment colors.
-  const segment = (value, label, colorClass, title, className = '') =>
+  const segment = (value, label, colorClass) =>
     value > 0 ? (
       <Tooltip
         placement="top"
@@ -320,9 +289,9 @@ const CleanUtilizationBar = ({
         }
       >
         <div
-          className={`${colorClass} h-full cursor-pointer hover:opacity-80 ${className}`.trim()}
+          className={`${colorClass} h-full cursor-pointer hover:opacity-80`}
           style={{ width: `${pct(value)}%` }}
-          title={title || `${value.toLocaleString()} ${label}`}
+          title={`${value.toLocaleString()} ${label}`}
         />
       </Tooltip>
     ) : null;
@@ -332,20 +301,6 @@ const CleanUtilizationBar = ({
     >
       {/* Occupied capacity reads from the left; free is always rightmost. */}
       {GPU_UTILIZATION_STATES.flatMap((s) => {
-        if (s.key === 'headroom' && headroomNodeSizes.length > 0) {
-          return headroomNodeSizes.map((nodeSize, index) =>
-            React.cloneElement(
-              segment(
-                nodeSize,
-                s.label,
-                s.colorClass,
-                `Unallocated node ${index + 1} of ${headroomNodeSizes.length} (${nodeSize.toLocaleString()} GPUs)`,
-                'border-l border-gray-100'
-              ),
-              { key: `${s.key}-${index}` }
-            )
-          );
-        }
         const el = segment(valueByKey[s.key], s.label, s.colorClass);
         return el ? [React.cloneElement(el, { key: s.key })] : [];
       })}
@@ -809,7 +764,6 @@ export function InfrastructureSection({
         gpu_free: 0,
         gpu_not_ready: 0,
         requestableQtys: new Set(),
-        gpu_headroom_node_sizes: [],
       };
       prev.gpu_total += gpu.gpu_total || 0;
       prev.gpu_free += gpu.gpu_free || 0;
@@ -820,9 +774,6 @@ export function InfrastructureSection({
       }
       if (gpu.gpu_requestable_qty_per_node !== undefined) {
         prev.requestableQtys.add(gpu.gpu_requestable_qty_per_node);
-      }
-      if (Array.isArray(gpu.gpu_headroom_node_sizes)) {
-        prev.gpu_headroom_node_sizes.push(...gpu.gpu_headroom_node_sizes);
       }
       byType.set(name, prev);
     });

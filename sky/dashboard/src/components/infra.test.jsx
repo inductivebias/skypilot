@@ -188,13 +188,13 @@ it('renders GPU counts with free green, allocated yellow, and not ready red', ()
   expect(screen.getByTitle('8 not ready')).toHaveClass('bg-red-600');
 });
 
-it('renders one gray segment per unallocated autoscaling node', () => {
+it('renders autoscaling headroom as one aggregate GPU segment', () => {
   render(
     <GpuTypeSummaryStrip
       gpus={[
         {
           gpu_name: 'H100',
-          gpu_total: 72,
+          gpu_total: 64,
           gpu_free: 0,
           gpu_not_ready: 0,
           gpu_min: 64,
@@ -206,14 +206,14 @@ it('renders one gray segment per unallocated autoscaling node', () => {
   );
 
   expect(screen.getByText('64 min · 160 max')).toBeInTheDocument();
-  const unallocatedNodes = screen.getAllByTitle(/Unallocated node/);
-  expect(unallocatedNodes).toHaveLength(11);
-  expect(unallocatedNodes[0]).toHaveClass('bg-gray-400');
-  expect(unallocatedNodes[0]).toHaveStyle({ width: '5%' });
-  expect(screen.getByTitle('72 allocated')).toHaveStyle({ width: '45%' });
+  const headroom = screen.getByTitle('96 autoscaling headroom');
+  expect(headroom).toHaveClass('bg-gray-400');
+  expect(headroom).toHaveStyle({ width: '60%' });
+  expect(screen.getByTitle('64 allocated')).toHaveStyle({ width: '40%' });
+  expect(screen.queryByTitle(/Unallocated node/)).not.toBeInTheDocument();
 });
 
-it('renders heterogeneous autoscaling pools as one segment per node', () => {
+it('aggregates heterogeneous autoscaling pools by GPU count', () => {
   render(
     <GpuTypeSummaryStrip
       gpus={[
@@ -224,19 +224,16 @@ it('renders heterogeneous autoscaling pools as one segment per node', () => {
           gpu_not_ready: 0,
           gpu_min: 4,
           gpu_max: 42,
-          gpu_headroom_node_sizes: [
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
-          ],
         },
       ]}
     />
   );
 
   expect(screen.getByText('4 min · 42 max')).toBeInTheDocument();
-  const unallocatedNodes = screen.getAllByTitle(/Unallocated node/);
-  expect(unallocatedNodes).toHaveLength(15);
-  expect(unallocatedNodes[0]).toHaveStyle({ width: `${(1 / 42) * 100}%` });
-  expect(unallocatedNodes[14]).toHaveStyle({ width: `${(2 / 42) * 100}%` });
+  const headroom = screen.getByTitle('21 autoscaling headroom');
+  expect(headroom).toHaveClass('bg-gray-400');
+  expect(headroom).toHaveStyle({ width: '50%' });
+  expect(screen.queryByTitle(/Unallocated node/)).not.toBeInTheDocument();
 });
 
 it('renders one unified per-context table without a Requestable column', () => {
