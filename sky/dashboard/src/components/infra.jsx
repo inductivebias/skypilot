@@ -299,7 +299,7 @@ const CleanUtilizationBar = ({
     <div
       className={`bg-gray-200/70 flex overflow-hidden ${heightClass} ${roundedClass} ${className}`.trim()}
     >
-      {/* Occupied capacity reads from the left; free is always rightmost. */}
+      {/* Provisioned capacity reads from the left; headroom is rightmost. */}
       {GPU_UTILIZATION_STATES.flatMap((s) => {
         const el = segment(valueByKey[s.key], s.label, s.colorClass);
         return el ? [React.cloneElement(el, { key: s.key })] : [];
@@ -4151,7 +4151,11 @@ export function GPUs() {
           <div className="bg-white rounded-lg border p-5 mb-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Total</h2>
-              <UtilizationLegend />
+              <UtilizationLegend
+                showHeadroom={totalGPUs.some(
+                  (gpu) => (gpu.gpu_max || 0) > (gpu.gpu_total || 0)
+                )}
+              />
             </div>
             <GpuTypeSummaryStrip gpus={totalGPUs} />
           </div>
