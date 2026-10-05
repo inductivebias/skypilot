@@ -1,6 +1,18 @@
 import PropTypes from 'prop-types';
 
+import { useJobEfficiencyMetrics } from '@/data/connectors/jobs';
 import { getJobEfficiencySummary } from '@/utils/jobEfficiency';
+
+const HARDWARE_ROWS = [
+  ['SM active', 'sm_active_percent', 'percent'],
+  ['VRAM used', 'vram_used_percent', 'percent'],
+  ['HBM active', 'dram_active_percent', 'percent'],
+  ['PCIe receive', 'pcie_rx_bytes_per_second', 'bytes'],
+  ['PCIe transmit', 'pcie_tx_bytes_per_second', 'bytes'],
+  ['NVLink receive', 'nvlink_rx_bytes_per_second', 'bytes'],
+  ['NVLink transmit', 'nvlink_tx_bytes_per_second', 'bytes'],
+];
+const PERCENTILES = ['p10', 'p25', 'p50', 'p75', 'p99'];
 
 function formatGpuHours(value) {
   if (value == null) return 'N/A';
@@ -18,6 +30,19 @@ function formatUsd(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function formatNumber(value, maximumFractionDigits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return 'N/A';
+  return Number(value).toLocaleString(undefined, {
+    maximumFractionDigits,
+  });
+}
+
+function formatHardware(value, unit) {
+  if (unit === 'percent') return `${formatNumber(value, 1)}%`;
+  if (unit === 'bytes') return `${formatNumber(value / 1e9, 2)} GB/s`;
+  return formatNumber(value);
 }
 
 function Metric({ label, value, title }) {
@@ -42,8 +67,10 @@ Metric.propTypes = {
   title: PropTypes.string,
 };
 
-export function JobEfficiencySummary({ job, tasks }) {
+export function JobEfficiencySummary({ job, tasks = [] }) {
   const summary = getJobEfficiencySummary(job, tasks);
+  const telemetry = useJobEfficiencyMetrics(job, tasks);
+  const progress = telemetry.progress || {};
   return (
     <div className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
       <div className="mb-3">
@@ -71,6 +98,69 @@ export function JobEfficiencySummary({ job, tasks }) {
           title={summary.submittedBy}
         />
       </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <Metric
+          label="Steps/second"
+          value={formatNumber(progress.steps_per_second)}
+        />
+        <Metric
+          label="FLOPs"
+          value={
+            progress.flops_per_second == null
+              ? 'N/A'
+              : `${formatNumber(progress.flops_per_second / 1e12)} TFLOP/s`
+          }
+          title="Reported steps/second multiplied by explicit model FLOPs per global step"
+        />
+        <Metric
+          label="MFU"
+          value={
+            progress.mfu_percent == null
+              ? 'N/A'
+              : `${formatNumber(progress.mfu_percent, 1)}%`
+          }
+          title="FLOP/s divided by explicit per-GPU peak FLOP/s and allocated GPU count"
+        />
+      </div>
+      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">Hardware</th>
+              {PERCENTILES.map((percentile) => (
+                <th
+                  key={percentile}
+                  className="px-3 py-2 text-right font-medium"
+                >
+                  {percentile.toUpperCase()}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {HARDWARE_ROWS.map(([label, key, unit]) => (
+              <tr key={key}>
+                <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-700">
+                  {label}
+                </td>
+                {PERCENTILES.map((percentile) => (
+                  <td
+                    key={percentile}
+                    className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-700"
+                  >
+                    {telemetry.hardware?.[key]?.[percentile] == null
+                      ? 'N/A'
+                      : formatHardware(
+                          telemetry.hardware[key][percentile],
+                          unit
+                        )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -78,8 +168,4 @@ export function JobEfficiencySummary({ job, tasks }) {
 JobEfficiencySummary.propTypes = {
   job: PropTypes.object.isRequired,
   tasks: PropTypes.arrayOf(PropTypes.object),
-};
-
-JobEfficiencySummary.defaultProps = {
-  tasks: [],
 };

@@ -5,6 +5,7 @@ import pathlib
 import fastapi
 
 from sky import sky_logging
+from sky.jobs import telemetry as managed_jobs_telemetry
 from sky.jobs import utils as managed_jobs_utils
 from sky.jobs.server import core
 from sky.server import stream_utils
@@ -20,6 +21,18 @@ from sky.utils import common
 logger = sky_logging.init_logger(__name__)
 
 router = fastapi.APIRouter()
+
+
+@router.get('/efficiency_metrics')
+async def efficiency_metrics(cluster_name_on_cloud: str, start: float,
+                             end: float) -> dict:
+    """Return optional efficiency decoration for a managed job cluster."""
+    try:
+        return await managed_jobs_telemetry.get_job_efficiency_metrics(
+            cluster_name_on_cloud, start, end)
+    except ValueError as error:
+        raise fastapi.HTTPException(status_code=400,
+                                    detail=str(error)) from error
 
 
 def _controller_refresh_need_long(refresh: bool) -> bool:
