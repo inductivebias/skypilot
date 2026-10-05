@@ -6,6 +6,15 @@ import { getErrorMessageFromResponse } from '@/data/utils';
 import dashboardCache from '@/lib/cache';
 import { buildContextStatsKeyFromCloud } from '@/utils/infraUtils';
 
+const KUBERNETES_CAPACITY_RESOURCES = {
+  'cks-use06a': {
+    group: 'compute.coreweave.com',
+    version: 'v1alpha1',
+    plural: 'nodepools',
+    name: 'flourish-h100-spot',
+  },
+};
+
 /**
  * Returns true iff `nodeData` (a `KubernetesNodeInfo`-shaped object from
  * the API) should be excluded from free-GPU availability counts — i.e.,
@@ -431,7 +440,8 @@ export async function getWorkspaceContexts() {
 // Returns processed GPU data for one context that can be merged into state
 export async function getContextGPUData(context) {
   try {
-    const nodeInfoDict = await getKubernetesPerNodeGPUs(context);
+    const { nodeInfoDict, customResource } =
+      await getKubernetesPerNodeGPUs(context);
 
     // Process node info into GPU summaries
     const gpuToData = {};
@@ -486,9 +496,27 @@ export async function getContextGPUData(context) {
       }
     }
 
+    const perContextGPUs = Object.values(gpuToData);
+    const minNodes = customResource?.spec?.minNodes;
+    const maxNodes = customResource?.spec?.maxNodes;
+    if (
+      perContextGPUs.length === 1 &&
+      Number.isInteger(minNodes) &&
+      Number.isInteger(maxNodes) &&
+      minNodes >= 0 &&
+      maxNodes >= minNodes
+    ) {
+      const gpu = perContextGPUs[0];
+      const gpusPerNode = gpu.gpu_requestable_qty_per_node;
+      if (gpusPerNode > 0) {
+        gpu.gpu_min = minNodes * gpusPerNode;
+        gpu.gpu_max = maxNodes * gpusPerNode;
+      }
+    }
+
     return {
       context,
-      perContextGPUs: Object.values(gpuToData),
+      perContextGPUs,
       perNodeGPUs: perNodeGPUs,
       error: null,
     };
@@ -537,11 +565,11 @@ async function getKubernetesGPUsFromContexts(contextNames) {
     for (let i = 0; i < contextNames.length; i++) {
       const result = contextNodeInfoResults[i];
       if (result.status === 'fulfilled') {
-        contextToNodeInfo[contextNames[i]] = result.value;
+        contextToNodeInfo[contextNames[i]] = result.value.nodeInfoDict;
         console.log(
           '[CONTEXT_DEBUG] Context node info result:',
           contextNames[i],
-          result.value
+          result.value.nodeInfoDict
         );
       } else {
         // Log the error but continue with other contexts
@@ -732,9 +760,12 @@ async function getKubernetesGPUsFromContexts(contextNames) {
 
 async function getKubernetesPerNodeGPUs(context) {
   try {
-    const response = await apiClient.post(`/kubernetes_node_info`, {
+    const customResource = KUBERNETES_CAPACITY_RESOURCES[context];
+    const body = {
       context: context,
-    });
+      ...(customResource && { custom_resource: customResource }),
+    };
+    const response = await apiClient.post(`/kubernetes_node_info`, body);
     if (!response.ok) {
       const msg = `Failed to get kubernetes node info for context ${context} with status ${response.status}, error: ${response.statusText}`;
       throw new Error(msg);
@@ -752,8 +783,10 @@ async function getKubernetesPerNodeGPUs(context) {
     }
     const data = await fetchedData.json();
     const nodeInfo = data.return_value ? JSON.parse(data.return_value) : {};
-    const nodeInfoDict = nodeInfo['node_info_dict'] || {};
-    return nodeInfoDict;
+    return {
+      nodeInfoDict: nodeInfo['node_info_dict'] || {},
+      customResource: nodeInfo['custom_resource'] || null,
+    };
   } catch (error) {
     console.warn(
       `[infra.jsx] Context ${context} unavailable or timed out:`,

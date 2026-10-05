@@ -137,6 +137,38 @@ describe('aggregateGPUsForContexts', () => {
       },
     ]);
   });
+
+  it('combines autoscaling bounds with fixed capacity', () => {
+    expect(
+      aggregateGPUsForContexts([
+        {
+          context: 'cks-use06a',
+          gpu_name: 'H100',
+          gpu_total: 64,
+          gpu_free: 0,
+          gpu_not_ready: 0,
+          gpu_min: 64,
+          gpu_max: 160,
+        },
+        {
+          context: 'fixed-context',
+          gpu_name: 'H100',
+          gpu_total: 8,
+          gpu_free: 8,
+          gpu_not_ready: 0,
+        },
+      ])
+    ).toEqual([
+      {
+        gpu_name: 'H100',
+        gpu_total: 72,
+        gpu_free: 8,
+        gpu_not_ready: 0,
+        gpu_min: 72,
+        gpu_max: 168,
+      },
+    ]);
+  });
 });
 
 it('renders GPU counts with free green, allocated yellow, and not ready red', () => {
@@ -152,6 +184,29 @@ it('renders GPU counts with free green, allocated yellow, and not ready red', ()
   expect(screen.getByTitle('24 free')).toHaveClass('bg-green-600');
   expect(screen.getByTitle('40 allocated')).toHaveClass('bg-yellow-500');
   expect(screen.getByTitle('8 not ready')).toHaveClass('bg-red-600');
+});
+
+it('renders autoscaling bounds and unallocated headroom in gray', () => {
+  render(
+    <GpuTypeSummaryStrip
+      gpus={[
+        {
+          gpu_name: 'H100',
+          gpu_total: 64,
+          gpu_free: 0,
+          gpu_not_ready: 0,
+          gpu_min: 64,
+          gpu_max: 160,
+        },
+      ]}
+    />
+  );
+
+  expect(screen.getByText('64 min · 160 max')).toBeInTheDocument();
+  expect(screen.getByTitle('96 autoscaling headroom')).toHaveClass(
+    'bg-gray-400'
+  );
+  expect(screen.getByTitle('64 allocated')).toHaveStyle({ width: '40%' });
 });
 
 it('renders one unified per-context table without a Requestable column', () => {
