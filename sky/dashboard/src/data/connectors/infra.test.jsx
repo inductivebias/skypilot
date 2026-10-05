@@ -13,7 +13,7 @@ describe('getContextGPUData', () => {
     jest.clearAllMocks();
   });
 
-  it('derives CKS GPU bounds from its exact NodePool snapshot', async () => {
+  it('uses provider-discovered CKS capacity without a pool selector', async () => {
     apiClient.post.mockResolvedValue({
       ok: true,
       headers: { get: () => 'request-id' },
@@ -33,10 +33,16 @@ describe('getContextGPUData', () => {
               },
             ])
           ),
-          custom_resource: {
-            metadata: { name: 'flourish-h100-spot' },
-            spec: { minNodes: 8, maxNodes: 20 },
-          },
+          autoscaling_capacity: [
+            {
+              node_pool: 'flourish-h100-spot',
+              accelerator_type: 'H100',
+              accelerators_per_node: 8,
+              current_nodes: 8,
+              min_nodes: 8,
+              max_nodes: 20,
+            },
+          ],
         }),
       }),
     });
@@ -45,12 +51,6 @@ describe('getContextGPUData', () => {
 
     expect(apiClient.post).toHaveBeenCalledWith('/kubernetes_node_info', {
       context: 'cks-use06a',
-      custom_resource: {
-        group: 'compute.coreweave.com',
-        version: 'v1alpha1',
-        plural: 'nodepools',
-        name: 'flourish-h100-spot',
-      },
     });
     expect(result.perContextGPUs).toEqual([
       expect.objectContaining({

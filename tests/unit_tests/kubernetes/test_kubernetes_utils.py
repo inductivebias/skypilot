@@ -751,6 +751,155 @@ def test_gke_autoscaling_capacity_backend_error_returns_empty():
     assert capacities == []
 
 
+def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
+
+    def response(max_nodes):
+        return {
+            'items': [{
+                'metadata': {
+                    'name': 'cks-rno2a-reserve',
+                    'annotations': {
+                        'skypilot.co/accelerators-per-node': '8',
+                    },
+                },
+                'spec': {
+                    'autoscaling': False,
+                    'minNodes': 2,
+                    'maxNodes': 2,
+                    'nodeLabels': {
+                        'skypilot.co/accelerator': 'h100',
+                    },
+                },
+                'status': {
+                    'currentNodes': 2,
+                },
+            }, {
+                'metadata': {
+                    'name': 'cks-rno2a-spot',
+                    'annotations': {
+                        'skypilot.co/accelerators-per-node': '8',
+                    },
+                },
+                'spec': {
+                    'autoscaling': True,
+                    'minNodes': 1,
+                    'maxNodes': max_nodes,
+                    'nodeLabels': {
+                        'skypilot.co/accelerator': 'h100',
+                    },
+                },
+                'status': {
+                    'currentNodes': 3,
+                },
+            }]
+        }
+
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.side_effect = [response(10), response(20)]
+    with mock.patch(
+            'sky.provision.kubernetes.utils.kubernetes.'
+            'custom_resources_api',
+            return_value=api):
+        first = utils._get_cks_autoscaling_capacity('cks-rno2a')
+        second = utils._get_cks_autoscaling_capacity('cks-rno2a')
+
+    assert [capacity.to_dict() for capacity in first] == [{
+        'node_pool': 'cks-rno2a-spot',
+        'accelerator_type': 'H100',
+        'accelerators_per_node': 8,
+        'current_nodes': 3,
+        'min_nodes': 1,
+        'max_nodes': 10,
+    }]
+    assert second[0].max_nodes == 20
+    api.list_cluster_custom_object.assert_has_calls([
+        call(group='compute.coreweave.com',
+             version='v1alpha1',
+             plural='nodepools'),
+        call(group='compute.coreweave.com',
+             version='v1alpha1',
+             plural='nodepools'),
+    ])
+
+
+def test_karpenter_autoscaling_capacity_excludes_static_pools():
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.return_value = {
+        'items': [{
+            'metadata': {
+                'name': 'flourish-a10g-baseline',
+                'annotations': {
+                    'skypilot.co/accelerators-per-node': '1',
+                },
+            },
+            'spec': {
+                'replicas': 1,
+                'limits': {
+                    'nodes': 1,
+                },
+                'template': {
+                    'metadata': {
+                        'labels': {
+                            'skypilot.co/accelerator': 'a10g',
+                        },
+                    },
+                },
+            },
+            'status': {
+                'nodes': '1',
+            },
+        }, {
+            'metadata': {
+                'name': 'flourish-a10g',
+                'annotations': {
+                    'skypilot.co/accelerators-per-node': '1',
+                },
+            },
+            'spec': {
+                'limits': {
+                    'nodes': '3',
+                },
+                'template': {
+                    'metadata': {
+                        'labels': {
+                            'skypilot.co/accelerator': 'a10g',
+                        },
+                    },
+                },
+            },
+            'status': {
+                'nodes': '1',
+            },
+        }]
+    }
+    with mock.patch(
+            'sky.provision.kubernetes.utils.kubernetes.'
+            'custom_resources_api',
+            return_value=api):
+        capacities = utils._get_karpenter_autoscaling_capacity('eks-us-east-1')
+
+    assert [capacity.to_dict() for capacity in capacities] == [{
+        'node_pool': 'flourish-a10g',
+        'accelerator_type': 'A10G',
+        'accelerators_per_node': 1,
+        'current_nodes': 1,
+        'min_nodes': 0,
+        'max_nodes': 3,
+    }]
+
+
+def test_custom_object_capacity_unavailable_returns_empty():
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.side_effect = RuntimeError('forbidden')
+    with mock.patch(
+            'sky.provision.kubernetes.utils.kubernetes.'
+            'custom_resources_api',
+            return_value=api):
+        capacities = utils._get_cks_autoscaling_capacity('cks-rno2a')
+
+    assert capacities == []
+
+
 def test_detect_gpu_label_formatter_suppresses_warning_for_coreweave_format():
     """Tests that warnings are not logged when GKE label keys have
     CoreWeave-formatted values (e.g., cloud.google.com/gke-accelerator=H100_NVLINK_80GB).
