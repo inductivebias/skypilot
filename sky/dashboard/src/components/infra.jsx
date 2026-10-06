@@ -234,6 +234,7 @@ const GPU_UTILIZATION_STATES = [
   {
     key: 'headroom',
     label: 'autoscaling headroom',
+    legendLabel: 'autoscaling',
     colorClass: 'bg-gray-400',
   },
 ];
@@ -252,7 +253,8 @@ const UtilizationLegend = ({ className = '', showHeadroom = false }) => (
         <span
           className={`inline-block w-3 h-3 rounded-sm border border-gray-300 ${s.colorClass}`}
         />
-        {s.label.charAt(0).toUpperCase() + s.label.slice(1)}
+        {(s.legendLabel ?? s.label).charAt(0).toUpperCase() +
+          (s.legendLabel ?? s.label).slice(1)}
       </span>
     ))}
   </div>

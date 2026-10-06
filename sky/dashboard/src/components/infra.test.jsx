@@ -245,6 +245,8 @@ it('renders one unified per-context table without a Requestable column', () => {
     gpu_total: 8,
     gpu_free: 0,
     gpu_not_ready: 0,
+    gpu_min: 8,
+    gpu_max: 16,
   };
   const { container } = render(
     <InfrastructureSection
@@ -269,6 +271,8 @@ it('renders one unified per-context table without a Requestable column', () => {
   expect(table).toHaveTextContent('0 of 8 free');
   expect(table).not.toHaveTextContent('Requestable');
   expect(container.querySelectorAll('table')).toHaveLength(1);
+  expect(screen.getByText('Autoscaling')).toBeInTheDocument();
+  expect(screen.queryByText('Autoscaling headroom')).not.toBeInTheDocument();
 });
 
 describe('node job history', () => {
