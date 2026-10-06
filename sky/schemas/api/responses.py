@@ -197,6 +197,9 @@ class ManagedJobRecord(ResponseBaseModel):
     job_name: Optional[str] = None
     task_name: Optional[str] = None
     job_duration: Optional[float] = None
+    # Configured allocation estimate. This excludes storage, networking, and
+    # shared control-plane overhead.
+    estimated_hourly_cost: Optional[float] = None
     workspace: Optional[str] = None
     status: Optional[job_state.ManagedJobStatus] = None
     schedule_state: Optional[str] = None

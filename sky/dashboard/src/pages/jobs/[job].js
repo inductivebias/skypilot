@@ -64,6 +64,7 @@ import { usePluginComponents } from '@/plugins/PluginProvider';
 import { checkGrafanaAvailability } from '@/utils/grafana';
 import { normalizeUrl, useLogLinkExtractor } from '@/utils/externalLinks';
 import { TelemetrySection } from '@/components/TelemetrySection';
+import { JobEfficiencySummary } from '@/components/JobEfficiencySummary';
 import { hasAccelerator } from '@/utils/gpuUtils';
 import { getInfraContextHref } from '@/utils/infraUtils';
 import { useLogStreamer } from '@/hooks/useLogStreamer';
@@ -401,6 +402,8 @@ function JobDetails() {
                 </div>
               </Card>
             </div>
+
+            <JobEfficiencySummary job={enhancedJobData} tasks={allTasks} />
 
             {/* Tasks Section - only show for multi-task jobs */}
             {isMultiTask && (

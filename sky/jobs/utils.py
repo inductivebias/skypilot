@@ -8,6 +8,7 @@ import asyncio
 import collections
 import concurrent.futures
 import contextlib
+import copy
 from datetime import datetime
 import enum
 import json
@@ -32,6 +33,7 @@ import filelock
 from sky import backends
 from sky import exceptions
 from sky import global_user_state
+from sky import resources as resources_lib
 from sky import sky_logging
 from sky import skypilot_config
 from sky.adaptors import common as adaptors_common
@@ -160,6 +162,8 @@ _NON_DB_FIELDS = _CLUSTER_HANDLE_FIELDS + [
     'is_job_group',
     # Raw JSON derived from the persisted node_names column.
     'node_name_lineage',
+    # Derived from full_resources and the requested node count.
+    'estimated_hourly_cost',
 ]
 
 
@@ -2405,6 +2409,11 @@ def _update_fields(fields: List[str],) -> Tuple[List[str], bool]:
             new_fields.append('execution')
     if 'node_name_lineage' in fields and 'node_names' not in new_fields:
         new_fields.append('node_names')
+    if 'estimated_hourly_cost' in fields:
+        if 'full_resources' not in new_fields:
+            new_fields.append('full_resources')
+        if 'resources' not in new_fields:
+            new_fields.append('resources')
     if cluster_handle_required:
         if 'task_name' not in new_fields:
             new_fields.append('task_name')
@@ -2442,6 +2451,53 @@ def _cluster_handle_not_required(fields: List[str]) -> bool:
         False otherwise.
     """
     return not any(field in fields for field in _CLUSTER_HANDLE_FIELDS)
+
+
+def _get_estimated_hourly_cost(full_resources: Optional[Dict[str, Any]],
+                               resources_str: Optional[str]) -> Optional[float]:
+    """Return the configured allocation cost for one managed-job task."""
+    if full_resources is None or resources_str is None:
+        return None
+    node_count_match = re.match(r'^(\d+)x\[', resources_str)
+    if node_count_match is None:
+        return None
+
+    try:
+        resources = resources_lib.Resources.from_yaml_config(
+            copy.deepcopy(full_resources))
+        if len(resources) != 1:
+            return None
+        resource = next(iter(resources))
+        try:
+            cost_per_node = resource.get_cost(3600)
+        except AssertionError:
+            # Kubernetes and SSH-node-pool tasks commonly persist accelerator
+            # requests before Sky resolves their virtual instance type. Build
+            # the equivalent type so configured Kubernetes pricing still
+            # applies to old and running jobs.
+            if resource.cloud is None or not resource.accelerators:
+                return None
+            accelerator_items = list(resource.accelerators.items())
+            if len(accelerator_items) != 1:
+                return None
+            accelerator_name, accelerator_count = accelerator_items[0]
+            instance_type = kubernetes_utils.KubernetesInstanceType(
+                cpus=0,
+                memory=0,
+                accelerator_count=int(accelerator_count),
+                accelerator_type=accelerator_name,
+            ).name
+            cost_per_node = resource.cloud.instance_type_to_hourly_cost(
+                instance_type, resource.use_spot, resource.region,
+                resource.zone)
+        hourly_cost = cost_per_node * int(node_count_match.group(1))
+        # An absent price is reported as unavailable, not as a free job.
+        return float(hourly_cost) if hourly_cost > 0 else None
+    except Exception as e:  # pylint: disable=broad-except
+        # Cost is optional decoration; malformed legacy resource records must
+        # not make the managed-jobs queue unavailable.
+        logger.debug(f'Failed to estimate managed-job cost: {e}')
+        return None
 
 
 def _format_job_details(*,
@@ -2758,6 +2814,11 @@ def get_managed_job_queue(
                 highest_blocking_priority=highest_blocking_priority,
                 recovery_reason=recovery_reasons.get(job['job_id']),
                 pending_reason=pending_reasons.get(job['job_id']))
+
+        if not fields or 'estimated_hourly_cost' in fields:
+            job['estimated_hourly_cost'] = _get_estimated_hourly_cost(
+                job.get('full_resources'), job.get('resources'))
+        job.pop('full_resources', None)
 
         # Derive is_job_group from execution column
         job['is_job_group'] = (

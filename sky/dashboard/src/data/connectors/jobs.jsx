@@ -40,6 +40,7 @@ function getJobsPaginationFetch() {
 
 // Configuration
 const DEFAULT_TAIL_LINES = 5000;
+const EFFICIENCY_REFRESH_INTERVAL_MS = 60000;
 const DEFAULT_FIELDS = [
   'job_id',
   '_job_id',
@@ -49,6 +50,7 @@ const DEFAULT_FIELDS = [
   'workspace',
   'submitted_at',
   'job_duration',
+  'estimated_hourly_cost',
   'status',
   'resources',
   'cloud',
@@ -63,6 +65,7 @@ const DEFAULT_FIELDS = [
   'failure_reason',
   'user_yaml',
   'entrypoint',
+  'metadata',
   'is_job_group',
   'execution',
   'is_primary_in_job_group',
@@ -293,6 +296,7 @@ export async function getManagedJobs(options = {}) {
         task: job.task_name,
         name: job.job_name,
         job_duration: job.job_duration,
+        estimated_hourly_cost: job.estimated_hourly_cost,
         total_duration: total_duration,
         workspace: job.workspace,
         status: job.status,
@@ -306,6 +310,8 @@ export async function getManagedJobs(options = {}) {
         recoveries: job.recovery_count,
         details: job.details || job.failure_reason,
         user: job.user_name,
+        metadata: job.metadata || {},
+        submitted_by: job.metadata?.submitted_by,
         user_hash: job.user_hash,
         submitted_at: job.submitted_at
           ? new Date(job.submitted_at * 1000)
@@ -355,6 +361,94 @@ export async function getManagedJobs(options = {}) {
     // Signal to the cache to not overwrite previously cached data
     throw error;
   }
+}
+
+export async function getJobEfficiencyMetrics({
+  clusterNameOnCloud,
+  start,
+  end,
+}) {
+  const params = new URLSearchParams({
+    cluster_name_on_cloud: clusterNameOnCloud,
+    start: String(start),
+    end: String(end),
+  });
+  const response = await apiClient.get(
+    `/jobs/efficiency_metrics?${params.toString()}`
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Failed to get job efficiency metrics with status ${response.status}`
+    );
+  }
+  return response.json();
+}
+
+function eventTimestamp(record, type) {
+  const event = record?.events?.find((item) => item.type === type);
+  return Number(event?.timestamp) || null;
+}
+
+export function useJobEfficiencyMetrics(job, tasks = []) {
+  const [metrics, setMetrics] = useState({
+    available: false,
+    hardware: {},
+    progress: {},
+  });
+  const records = tasks.length > 0 ? tasks : [job];
+  const clusterNameOnCloud = records.find(
+    (record) => record?.cluster_name_on_cloud
+  )?.cluster_name_on_cloud;
+  const starts = records
+    .map(
+      (record) =>
+        eventTimestamp(record, 'RUNNING') ||
+        (record?.submitted_at instanceof Date
+          ? record.submitted_at.getTime() / 1000
+          : Number(record?.submitted_at))
+    )
+    .filter(Number.isFinite);
+  const terminalEnds = records
+    .flatMap((record) => record?.events || [])
+    .filter((event) => !['PENDING', 'RUNNING'].includes(event.type))
+    .map((event) => Number(event.timestamp))
+    .filter(Number.isFinite);
+  const start = starts.length > 0 ? Math.min(...starts) : null;
+  const terminalEnd =
+    terminalEnds.length > 0 ? Math.max(...terminalEnds) : null;
+
+  useEffect(() => {
+    if (!clusterNameOnCloud || start == null) {
+      setMetrics({ available: false, hardware: {}, progress: {} });
+      return undefined;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await getJobEfficiencyMetrics({
+          clusterNameOnCloud,
+          start,
+          end: terminalEnd || Date.now() / 1000,
+        });
+        if (!cancelled) setMetrics(result);
+      } catch (error) {
+        console.warn('Failed to fetch job efficiency metrics:', error);
+        if (!cancelled) {
+          setMetrics({ available: false, hardware: {}, progress: {} });
+        }
+      }
+    };
+    load();
+    const interval = terminalEnd
+      ? null
+      : setInterval(load, EFFICIENCY_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (interval != null) clearInterval(interval);
+    };
+  }, [clusterNameOnCloud, start, terminalEnd]);
+
+  return metrics;
 }
 
 /**

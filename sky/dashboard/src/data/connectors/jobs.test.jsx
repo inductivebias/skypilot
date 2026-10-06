@@ -13,9 +13,44 @@ jest.mock('@/lib/cache', () => ({
     clear: jest.fn(),
   },
 }));
+jest.mock('@/data/connectors/client', () => ({
+  apiClient: {
+    get: jest.fn(),
+    post: jest.fn(),
+  },
+}));
 
 import dashboardCache from '@/lib/cache';
-import { useSingleManagedJob, getManagedJobs } from '@/data/connectors/jobs';
+import { apiClient } from '@/data/connectors/client';
+import {
+  getJobEfficiencyMetrics,
+  useSingleManagedJob,
+  getManagedJobs,
+} from '@/data/connectors/jobs';
+
+describe('getJobEfficiencyMetrics', () => {
+  it('requests the bounded job cluster and time range', async () => {
+    apiClient.get.mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        available: true,
+        hardware: {},
+        progress: { steps_per_second: 3.5 },
+      }),
+    });
+
+    const result = await getJobEfficiencyMetrics({
+      clusterNameOnCloud: 'sky-job-123',
+      start: 100,
+      end: 200,
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/jobs/efficiency_metrics?cluster_name_on_cloud=sky-job-123&start=100&end=200'
+    );
+    expect(result.progress.steps_per_second).toBe(3.5);
+  });
+});
 
 describe('useSingleManagedJob manual-refresh cache invalidation', () => {
   const jobId = '56164';
