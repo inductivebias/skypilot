@@ -47,7 +47,7 @@ export function getSubmittedBy(job) {
   if (current) return current[1];
   const transitional = name.match(/-a[1-9]\d*\.by\.([a-z0-9][a-z0-9-]*)$/i);
   if (transitional) return transitional[1];
-  return job?.user || job?.user_name || 'N/A';
+  return job?.user || job?.user_name || 'Unknown';
 }
 
 export function getSmIdleSummary(gpuHours, smActiveMean) {

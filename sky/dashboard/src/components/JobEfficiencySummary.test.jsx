@@ -47,11 +47,13 @@ describe('JobEfficiencySummary', () => {
     expect(screen.getByText('75% \u00b7 0.75 GPU-h')).toBeInTheDocument();
     expect(screen.getByText('SM active')).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument();
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('N/A')).toHaveLength(10);
 
     const toggle = screen.getByRole('button', {
       name: /Efficiency summary/i,
     });
+    expect(toggle.firstElementChild.tagName).toBe('svg');
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -79,6 +81,7 @@ describe('JobEfficiencySummary', () => {
 
     expect(screen.getByText('GPU-hours')).toBeInTheDocument();
     expect(screen.getByText('Estimated SM idle')).toBeInTheDocument();
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByText('0.000')).toBeInTheDocument();
     expect(
       screen.getByText(
