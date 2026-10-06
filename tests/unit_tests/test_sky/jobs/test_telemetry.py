@@ -32,6 +32,16 @@ def test_job_query_rejects_promql_injection():
         telemetry._job_query('job"} or up')
 
 
+def test_gmp_job_query_filters_both_exporter_label_shapes():
+    query = telemetry._gmp_job_query('sky-job.123')
+
+    assert 'exported_pod=~"^sky-job\\\\.123-(head|worker.*)$"' in query
+    assert 'pod=~"^sky-job\\\\.123-(head|worker.*)$"' in query
+    assert 'kube_pod_labels' not in query
+    assert 'DCGM_FI_PROF_SM_ACTIVE' in query
+    assert 'flr_progress_steps_per_second' in query
+
+
 def test_summarize_series_calculates_percentiles_and_latest_progress():
     hardware, progress = telemetry._summarize_series([
         {
@@ -61,6 +71,7 @@ def test_summarize_series_calculates_percentiles_and_latest_progress():
 @pytest.mark.asyncio
 async def test_get_job_efficiency_metrics_queries_existing_prometheus(
         monkeypatch):
+    monkeypatch.delenv('SKYPILOT_GMP_PROJECT_ID', raising=False)
     monkeypatch.setattr(telemetry.core, 'get_all_contexts',
                         lambda: ['in-cluster', 'ctx-a'])
     requests = []
@@ -106,8 +117,41 @@ async def test_get_job_efficiency_metrics_queries_existing_prometheus(
 
 
 @pytest.mark.asyncio
+async def test_get_job_efficiency_metrics_queries_configured_gmp(monkeypatch):
+    monkeypatch.setenv('SKYPILOT_GMP_PROJECT_ID', 'test-project')
+    requests = []
+
+    async def fake_query(project, location, query, start, end, step):
+        requests.append((project, location, query, start, end, step))
+        return [{
+            'metric': {
+                'flr_metric': 'sm_active_percent'
+            },
+            'values': [[200, '75']],
+        }]
+
+    monkeypatch.setattr(telemetry, '_query_gmp', fake_query)
+    monkeypatch.setattr(telemetry.core, 'get_all_contexts',
+                        lambda: pytest.fail('context fallback must not run'))
+
+    result = await telemetry.get_job_efficiency_metrics('sky-job-123',
+                                                        start=100,
+                                                        end=200)
+
+    assert result['available'] is True
+    assert result['hardware']['sm_active_percent']['p50'] == 75
+    assert len(requests) == 1
+    project, location, query, start, end, step = requests[0]
+    assert project == 'test-project'
+    assert location == 'global'
+    assert 'exported_pod=~"^sky-job-123-(head|worker.*)$"' in query
+    assert (start, end, step) == (100, 200, 60)
+
+
+@pytest.mark.asyncio
 async def test_get_job_efficiency_metrics_collection_failure_fails_open(
         monkeypatch):
+    monkeypatch.delenv('SKYPILOT_GMP_PROJECT_ID', raising=False)
     monkeypatch.setattr(telemetry.core, 'get_all_contexts', lambda: ['ctx-a'])
 
     async def fail_request(**kwargs):

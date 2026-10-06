@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+import os
 import re
 import time
 from typing import Dict, List, Optional, Tuple
@@ -20,6 +21,7 @@ _PROMETHEUS_PORT = 80
 _QUERY_TIMEOUT_SECONDS = 30
 _MAX_POINTS_PER_SERIES = 1000
 _CLUSTER_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_.:/-]{1,253}$')
+_GMP_RESOURCE_PATTERN = re.compile(r'^[A-Za-z0-9_.:-]+$')
 _PERCENTILES = (10, 25, 50, 75, 99)
 
 _HARDWARE_EXPRESSIONS = {
@@ -59,6 +61,46 @@ def _job_query(cluster_name_on_cloud: str) -> str:
                   f'group_left(label_skypilot_cluster_name) ({pods})')
         expressions.append(f'label_replace(({joined}), "flr_metric", "{name}", '
                            '"__name__", ".*")')
+    return ' or '.join(expressions)
+
+
+def _gmp_job_query(cluster_name_on_cloud: str) -> str:
+    """Build a job query for a central GMP-compatible Prometheus API."""
+    if _CLUSTER_NAME_PATTERN.fullmatch(cluster_name_on_cloud) is None:
+        raise ValueError('Invalid managed-job cluster name')
+    escaped_cluster = re.escape(cluster_name_on_cloud).replace(r'\-', '-')
+    workload_pod = json.dumps(f'^{escaped_cluster}-(head|worker.*)$')
+
+    def workload_metric(metric: str) -> str:
+        # PodMonitoring preserves its own exporter pod under ``pod`` and
+        # renames the DCGM workload label to ``exported_pod``. Off-cloud
+        # collectors scrape DCGM directly, so the workload remains ``pod``.
+        return (f'({metric}{{exported_pod=~{workload_pod}}} or '
+                f'{metric}{{pod=~{workload_pod}}})')
+
+    hardware = {
+        'sm_active_percent': f'100 * {workload_metric("DCGM_FI_PROF_SM_ACTIVE")}',
+        'dram_active_percent': f'100 * {workload_metric("DCGM_FI_PROF_DRAM_ACTIVE")}',
+        'vram_used_percent':
+            (f'100 * {workload_metric("DCGM_FI_DEV_FB_USED")} / '
+             f'({workload_metric("DCGM_FI_DEV_FB_USED")} + '
+             f'{workload_metric("DCGM_FI_DEV_FB_FREE")})'),
+        'pcie_tx_bytes_per_second':
+            workload_metric('DCGM_FI_PROF_PCIE_TX_BYTES'),
+        'pcie_rx_bytes_per_second':
+            workload_metric('DCGM_FI_PROF_PCIE_RX_BYTES'),
+        'nvlink_tx_bytes_per_second':
+            workload_metric('DCGM_FI_PROF_NVLINK_TX_BYTES'),
+        'nvlink_rx_bytes_per_second':
+            workload_metric('DCGM_FI_PROF_NVLINK_RX_BYTES'),
+    }
+    expressions = [
+        f'label_replace(({expression}), "flr_metric", "{name}", '
+        '"__name__", ".*")' for name, expression in hardware.items()
+    ]
+    expressions.extend(
+        f'label_replace(({workload_metric(metric)}), "flr_metric", "{name}", '
+        '"__name__", ".*")' for name, metric in _PROGRESS_METRICS.items())
     return ' or '.join(expressions)
 
 
@@ -140,6 +182,48 @@ async def _query_context(context: str, query: str, start: float, end: float,
     return result if isinstance(result, list) else []
 
 
+def _query_gmp_sync(project: str, location: str, query: str, start: float,
+                    end: float, step: int) -> List[dict]:
+    """Query Google Managed Service for Prometheus with ADC."""
+    # GMP is opt-in and requires SkyPilot's GCP extra.
+    # pylint: disable=import-outside-toplevel
+    import google.auth  # type: ignore[import-untyped]
+    from google.auth.transport import (  # type: ignore[import-untyped]
+        requests as google_requests,)
+
+    credentials, _ = google.auth.default(scopes=[
+        'https://www.googleapis.com/auth/monitoring.read',
+    ])
+    session = google_requests.AuthorizedSession(credentials)
+    endpoint = (
+        'https://monitoring.googleapis.com/v1/projects/'
+        f'{urlparse.quote(project, safe="")}/location/'
+        f'{urlparse.quote(location, safe="")}/prometheus/api/v1/query_range')
+    try:
+        response = session.get(endpoint,
+                               params={
+                                   'query': query,
+                                   'start': start,
+                                   'end': end,
+                                   'step': step,
+                               },
+                               timeout=_QUERY_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        session.close()
+    if payload.get('status') != 'success':
+        raise RuntimeError('GMP query failed')
+    result = payload.get('data', {}).get('result', [])
+    return result if isinstance(result, list) else []
+
+
+async def _query_gmp(project: str, location: str, query: str, start: float,
+                     end: float, step: int) -> List[dict]:
+    return await asyncio.to_thread(_query_gmp_sync, project, location, query,
+                                   start, end, step)
+
+
 async def get_job_efficiency_metrics(cluster_name_on_cloud: str,
                                      start: float,
                                      end: Optional[float] = None) -> dict:
@@ -154,27 +238,44 @@ async def get_job_efficiency_metrics(cluster_name_on_cloud: str,
         raise ValueError('Invalid metrics time range')
     if end < start:
         raise ValueError('Metrics end must not precede start')
-    query = _job_query(cluster_name_on_cloud)
     duration = max(1, end - start)
     step = max(60, math.ceil(duration / _MAX_POINTS_PER_SERIES))
-    contexts = [
-        context for context in core.get_all_contexts()
-        if context != 'in-cluster'
-    ]
-    tasks = [
-        asyncio.create_task(
-            asyncio.wait_for(_query_context(context, query, start, end, step),
-                             timeout=_QUERY_TIMEOUT_SECONDS))
-        for context in contexts
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
     series = []
-    for context, result in zip(contexts, results):
-        if isinstance(result, Exception):
-            logger.warning('Failed to query job efficiency metrics for '
-                           f'context {context}: {result}')
-            continue
-        series.extend(result)
+    gmp_project = os.environ.get('SKYPILOT_GMP_PROJECT_ID')
+    if gmp_project:
+        gmp_location = os.environ.get('SKYPILOT_GMP_LOCATION', 'global')
+        if (_GMP_RESOURCE_PATTERN.fullmatch(gmp_project) is None or
+                _GMP_RESOURCE_PATTERN.fullmatch(gmp_location) is None):
+            raise ValueError('Invalid GMP project or location')
+        try:
+            result = await asyncio.wait_for(_query_gmp(
+                gmp_project, gmp_location,
+                _gmp_job_query(cluster_name_on_cloud), start, end, step),
+                                            timeout=_QUERY_TIMEOUT_SECONDS)
+            series.extend(result)
+        except Exception as error:  # pylint: disable=broad-except
+            logger.warning(f'Failed to query job efficiency metrics from GMP: '
+                           f'{error}')
+    else:
+        query = _job_query(cluster_name_on_cloud)
+        contexts = [
+            context for context in core.get_all_contexts()
+            if context != 'in-cluster'
+        ]
+        tasks = [
+            asyncio.create_task(
+                asyncio.wait_for(_query_context(context, query, start, end,
+                                                step),
+                                 timeout=_QUERY_TIMEOUT_SECONDS))
+            for context in contexts
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for context, result in zip(contexts, results):
+            if isinstance(result, Exception):
+                logger.warning('Failed to query job efficiency metrics for '
+                               f'context {context}: {result}')
+                continue
+            series.extend(result)
     hardware, progress = _summarize_series(series)
     return {
         'available': bool(hardware or progress),
