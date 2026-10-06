@@ -185,6 +185,37 @@ class TestSerializeKubernetesNodeInfo:
     @mock.patch(
         'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
     )
+    def test_autoscaling_capacity_requires_api_version_59(
+            self, mock_get_version):
+        data = {
+            'node_info_dict': {},
+            'hint': '',
+            'autoscaling_capacity': [{
+                'node_pool': 'a100',
+                'accelerator_type': 'A100',
+                'accelerators_per_node': 1,
+                'current_nodes': 1,
+                'min_nodes': 0,
+                'max_nodes': 10,
+            }],
+        }
+        mock_get_version.return_value = 58
+
+        old_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert 'autoscaling_capacity' not in json.loads(old_result)
+        mock_get_version.return_value = 59
+
+        new_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert json.loads(
+            new_result)['autoscaling_capacity'] == data['autoscaling_capacity']
+
+    @mock.patch(
+        'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
+    )
     def test_remote_version_none_keeps_is_ready(self, mock_get_version):
         """Test that is_ready is kept when remote_api_version is None."""
         mock_get_version.return_value = None

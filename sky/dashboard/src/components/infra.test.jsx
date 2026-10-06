@@ -137,6 +137,40 @@ describe('aggregateGPUsForContexts', () => {
       },
     ]);
   });
+
+  it('combines autoscaling bounds with fixed capacity', () => {
+    expect(
+      aggregateGPUsForContexts([
+        {
+          context: 'cks-use06a',
+          gpu_name: 'H100',
+          gpu_total: 64,
+          gpu_free: 0,
+          gpu_not_ready: 0,
+          gpu_min: 64,
+          gpu_max: 160,
+          gpu_requestable_qty_per_node: 8,
+        },
+        {
+          context: 'fixed-context',
+          gpu_name: 'H100',
+          gpu_total: 8,
+          gpu_free: 8,
+          gpu_not_ready: 0,
+        },
+      ])
+    ).toEqual([
+      {
+        gpu_name: 'H100',
+        gpu_total: 72,
+        gpu_free: 8,
+        gpu_not_ready: 0,
+        gpu_min: 72,
+        gpu_max: 168,
+        gpu_requestable_qty_per_node: 8,
+      },
+    ]);
+  });
 });
 
 it('renders GPU counts with free green, allocated yellow, and not ready red', () => {
@@ -154,6 +188,54 @@ it('renders GPU counts with free green, allocated yellow, and not ready red', ()
   expect(screen.getByTitle('8 not ready')).toHaveClass('bg-red-600');
 });
 
+it('renders autoscaling headroom as one aggregate GPU segment', () => {
+  render(
+    <GpuTypeSummaryStrip
+      gpus={[
+        {
+          gpu_name: 'H100',
+          gpu_total: 64,
+          gpu_free: 0,
+          gpu_not_ready: 0,
+          gpu_min: 64,
+          gpu_max: 160,
+          gpu_requestable_qty_per_node: 8,
+        },
+      ]}
+    />
+  );
+
+  expect(screen.getByText('64 min · 160 max')).toBeInTheDocument();
+  const headroom = screen.getByTitle('96 autoscaling headroom');
+  expect(headroom).toHaveClass('bg-gray-400');
+  expect(headroom).toHaveStyle({ width: '60%' });
+  expect(screen.getByTitle('64 allocated')).toHaveStyle({ width: '40%' });
+  expect(screen.queryByTitle(/Unallocated node/)).not.toBeInTheDocument();
+});
+
+it('aggregates heterogeneous autoscaling pools by GPU count', () => {
+  render(
+    <GpuTypeSummaryStrip
+      gpus={[
+        {
+          gpu_name: 'A100',
+          gpu_total: 21,
+          gpu_free: 1,
+          gpu_not_ready: 0,
+          gpu_min: 4,
+          gpu_max: 42,
+        },
+      ]}
+    />
+  );
+
+  expect(screen.getByText('4 min · 42 max')).toBeInTheDocument();
+  const headroom = screen.getByTitle('21 autoscaling headroom');
+  expect(headroom).toHaveClass('bg-gray-400');
+  expect(headroom).toHaveStyle({ width: '50%' });
+  expect(screen.queryByTitle(/Unallocated node/)).not.toBeInTheDocument();
+});
+
 it('renders one unified per-context table without a Requestable column', () => {
   const context = 'ssh-deploy-lambda-1';
   const gpu = {
@@ -163,6 +245,8 @@ it('renders one unified per-context table without a Requestable column', () => {
     gpu_total: 8,
     gpu_free: 0,
     gpu_not_ready: 0,
+    gpu_min: 8,
+    gpu_max: 16,
   };
   const { container } = render(
     <InfrastructureSection
@@ -187,6 +271,8 @@ it('renders one unified per-context table without a Requestable column', () => {
   expect(table).toHaveTextContent('0 of 8 free');
   expect(table).not.toHaveTextContent('Requestable');
   expect(container.querySelectorAll('table')).toHaveLength(1);
+  expect(screen.getByText('Autoscaling')).toBeInTheDocument();
+  expect(screen.queryByText('Autoscaling headroom')).not.toBeInTheDocument();
 });
 
 describe('node job history', () => {

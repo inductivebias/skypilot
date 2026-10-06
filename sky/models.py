@@ -113,6 +113,20 @@ class KubernetesNodeInfo:
 
 
 @dataclasses.dataclass
+class KubernetesAutoscalingCapacity:
+    """One autoscaled Kubernetes node pool's live capacity bounds."""
+    node_pool: str
+    accelerator_type: str
+    accelerators_per_node: int
+    current_nodes: int
+    min_nodes: int
+    max_nodes: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
 class KubernetesNodesInfo:
     """Dataclass to store Kubernetes node info map."""
     # The nodes in the cluster, keyed by node name.
@@ -121,6 +135,9 @@ class KubernetesNodesInfo:
     hint: str
     # One exact read-only custom resource requested with the node snapshot.
     custom_resource: Optional[Dict[str, Any]] = None
+    # Live bounds for autoscaled accelerator node pools, when the configured
+    # provider exposes a queryable source of truth.
+    autoscaling_capacity: Optional[List[KubernetesAutoscalingCapacity]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -130,6 +147,10 @@ class KubernetesNodesInfo:
             },
             'hint': self.hint,
             'custom_resource': self.custom_resource,
+            'autoscaling_capacity': [
+                capacity.to_dict()
+                for capacity in (self.autoscaling_capacity or [])
+            ],
         }
 
     @classmethod
@@ -141,6 +162,10 @@ class KubernetesNodesInfo:
             },
             hint=data['hint'],
             custom_resource=data.get('custom_resource'),
+            autoscaling_capacity=[
+                KubernetesAutoscalingCapacity(**capacity)
+                for capacity in data.get('autoscaling_capacity', [])
+            ],
         )
 
 

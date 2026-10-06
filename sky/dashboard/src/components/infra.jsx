@@ -167,14 +167,48 @@ export function aggregateGPUsForContexts(perContextGPUs, contexts) {
       gpu_total: 0,
       gpu_free: 0,
       gpu_not_ready: 0,
+      capacity_min: 0,
+      capacity_max: 0,
+      has_capacity_bounds: false,
+      gpus_per_node: undefined,
     };
-    summary.gpu_total += gpu.gpu_total || 0;
+    const gpuTotal = gpu.gpu_total || 0;
+    const hasCapacityBounds =
+      Number.isFinite(gpu.gpu_min) && Number.isFinite(gpu.gpu_max);
+    summary.gpu_total += gpuTotal;
     summary.gpu_free += gpu.gpu_free || 0;
     summary.gpu_not_ready += gpu.gpu_not_ready || 0;
+    summary.capacity_min += hasCapacityBounds ? gpu.gpu_min : gpuTotal;
+    summary.capacity_max += hasCapacityBounds ? gpu.gpu_max : gpuTotal;
+    summary.has_capacity_bounds ||= hasCapacityBounds;
+    const gpusPerNode = gpu.gpu_requestable_qty_per_node;
+    if (hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0) {
+      if (summary.gpus_per_node === undefined) {
+        summary.gpus_per_node = gpusPerNode;
+      } else if (summary.gpus_per_node !== gpusPerNode) {
+        summary.gpus_per_node = null;
+      }
+    }
     gpuSummary.set(gpuName, summary);
   });
 
-  return Array.from(gpuSummary.values());
+  return Array.from(gpuSummary.values()).map((summary) => {
+    const {
+      capacity_min: capacityMin,
+      capacity_max: capacityMax,
+      has_capacity_bounds: hasCapacityBounds,
+      gpus_per_node: gpusPerNode,
+      ...gpu
+    } = summary;
+    const capacity = hasCapacityBounds
+      ? { gpu_min: capacityMin, gpu_max: capacityMax }
+      : {};
+    const nodeSize =
+      hasCapacityBounds && Number.isFinite(gpusPerNode) && gpusPerNode > 0
+        ? { gpu_requestable_qty_per_node: gpusPerNode }
+        : {};
+    return { ...gpu, ...capacity, ...nodeSize };
+  });
 }
 
 // Skeleton badge for loading cells - replaces CircularProgress size={12}
@@ -191,18 +225,27 @@ const SkeletonBadge = () => (
 // their segment colors. Both the bar and the legend derive from this so the
 // two can never drift. Order = left-to-right fill order in the bar.
 //
-// Allocated is yellow, not ready is red, and free is green.
+// Allocated is yellow, not ready is red, free is green, and capacity that the
+// autoscaler may still provision is gray.
 const GPU_UTILIZATION_STATES = [
   { key: 'used', label: 'allocated', colorClass: 'bg-yellow-500' },
   { key: 'notReady', label: 'not ready', colorClass: 'bg-red-600' },
   { key: 'free', label: 'free', colorClass: 'bg-green-600' },
+  {
+    key: 'headroom',
+    label: 'autoscaling headroom',
+    legendLabel: 'autoscaling',
+    colorClass: 'bg-gray-400',
+  },
 ];
 
 // Color key for the utilization bar, rendered on the section header row:
 // square swatches with capitalized labels.
-const UtilizationLegend = ({ className = '' }) => (
+const UtilizationLegend = ({ className = '', showHeadroom = false }) => (
   <div className={`flex items-center gap-3 ${className}`.trim()}>
-    {GPU_UTILIZATION_STATES.map((s) => (
+    {GPU_UTILIZATION_STATES.filter(
+      (s) => s.key !== 'headroom' || showHeadroom
+    ).map((s) => (
       <span
         key={s.key}
         className="flex items-center gap-1.5 text-xs text-gray-500 whitespace-nowrap"
@@ -210,15 +253,16 @@ const UtilizationLegend = ({ className = '' }) => (
         <span
           className={`inline-block w-3 h-3 rounded-sm border border-gray-300 ${s.colorClass}`}
         />
-        {s.label.charAt(0).toUpperCase() + s.label.slice(1)}
+        {(s.legendLabel ?? s.label).charAt(0).toUpperCase() +
+          (s.legendLabel ?? s.label).slice(1)}
       </span>
     ))}
   </div>
 );
 
-// Clean segmented utilization bar (used / not-ready / free) with no text baked
-// inside the segments — colors only, detail on hover. 14px tall, gray track,
-// colors from GPU_UTILIZATION_STATES.
+// Clean segmented utilization bar (used / not-ready / free / autoscaling
+// headroom) with no text baked inside the segments — colors only, detail on
+// hover. 14px tall, gray track, colors from GPU_UTILIZATION_STATES.
 const CleanUtilizationBar = ({
   gpu,
   className = '',
@@ -226,11 +270,13 @@ const CleanUtilizationBar = ({
   roundedClass = 'rounded',
 }) => {
   const total = gpu?.gpu_total || 0;
+  const capacity = Math.max(total, gpu?.gpu_max || 0);
   const notReady = gpu?.gpu_not_ready || 0;
   const free = gpu?.gpu_free || 0;
   const used = Math.max(0, total - free - notReady);
-  const valueByKey = { used, notReady, free };
-  const pct = (v) => (total > 0 ? (v / total) * 100 : 0);
+  const headroom = Math.max(0, capacity - total);
+  const valueByKey = { used, notReady, free, headroom };
+  const pct = (v) => (capacity > 0 ? (v / capacity) * 100 : 0);
   // Each segment carries its own tooltip so hover reports exactly the
   // segment under the cursor ("552 used"), not a whole-bar summary. Dark
   // tooltip (gray-800/white) for contrast against the segment colors.
@@ -255,10 +301,10 @@ const CleanUtilizationBar = ({
     <div
       className={`bg-gray-200/70 flex overflow-hidden ${heightClass} ${roundedClass} ${className}`.trim()}
     >
-      {/* Occupied capacity reads from the left; free is always rightmost. */}
-      {GPU_UTILIZATION_STATES.map((s) => {
+      {/* Provisioned capacity reads from the left; headroom is rightmost. */}
+      {GPU_UTILIZATION_STATES.flatMap((s) => {
         const el = segment(valueByKey[s.key], s.label, s.colorClass);
-        return el ? React.cloneElement(el, { key: s.key }) : null;
+        return el ? [React.cloneElement(el, { key: s.key })] : [];
       })}
     </div>
   );
@@ -281,23 +327,33 @@ export const GpuTypeSummaryStrip = ({ gpus }) => {
         {sorted.map((gpu) => {
           const free = gpu.gpu_free ?? 0;
           const total = gpu.gpu_total ?? 0;
+          const hasCapacityBounds =
+            Number.isFinite(gpu.gpu_min) && Number.isFinite(gpu.gpu_max);
           return (
             <div key={gpu.gpu_name} className="min-w-0">
               <div className="flex items-baseline justify-between gap-2 mb-1.5">
                 <span className="text-[13px] font-medium text-gray-800 truncate">
                   {canonicalizeGpuName(gpu.gpu_name)}
                 </span>
-                <span className="text-xs text-gray-600 whitespace-nowrap tabular-nums">
-                  <span
-                    className={`font-semibold ${
-                      free > 0 ? 'text-gray-900' : 'text-gray-500'
-                    }`}
-                  >
-                    {free.toLocaleString()}
-                  </span>
-                  {' of '}
-                  {total.toLocaleString()} free
-                </span>
+                <div className="text-right whitespace-nowrap tabular-nums">
+                  <div className="text-xs text-gray-600">
+                    <span
+                      className={`font-semibold ${
+                        free > 0 ? 'text-gray-900' : 'text-gray-500'
+                      }`}
+                    >
+                      {free.toLocaleString()}
+                    </span>
+                    {' of '}
+                    {total.toLocaleString()} free
+                  </div>
+                  {hasCapacityBounds && (
+                    <div className="text-[11px] text-gray-500">
+                      {gpu.gpu_min.toLocaleString()} min ·{' '}
+                      {gpu.gpu_max.toLocaleString()} max
+                    </div>
+                  )}
+                </div>
               </div>
               <CleanUtilizationBar gpu={gpu} className="w-full" />
             </div>
@@ -714,12 +770,22 @@ export function InfrastructureSection({
       prev.gpu_total += gpu.gpu_total || 0;
       prev.gpu_free += gpu.gpu_free || 0;
       prev.gpu_not_ready += gpu.gpu_not_ready || 0;
+      if (Number.isFinite(gpu.gpu_min) && Number.isFinite(gpu.gpu_max)) {
+        prev.gpu_min = (prev.gpu_min || 0) + gpu.gpu_min;
+        prev.gpu_max = (prev.gpu_max || 0) + gpu.gpu_max;
+      }
       if (gpu.gpu_requestable_qty_per_node !== undefined) {
         prev.requestableQtys.add(gpu.gpu_requestable_qty_per_node);
       }
       byType.set(name, prev);
     });
-    const typeAgg = Array.from(byType.values());
+    const typeAgg = Array.from(byType.values()).map((gpu) => {
+      if (gpu.requestableQtys.size !== 1) return gpu;
+      return {
+        ...gpu,
+        gpu_requestable_qty_per_node: Array.from(gpu.requestableQtys)[0],
+      };
+    });
 
     const contextStatsKey = buildContextStatsKey(context, { isSSH, isSlurm });
     const stats = contextStats[contextStatsKey] || { clusters: 0, jobs: 0 };
@@ -828,7 +894,12 @@ export function InfrastructureSection({
               {/* Color key for the Utilization bars, pinned to the right end;
                   only meaningful when the table has GPU rows to explain. */}
               {gpus && gpus.length > 0 && (
-                <UtilizationLegend className="hidden sm:flex" />
+                <UtilizationLegend
+                  className="hidden sm:flex"
+                  showHeadroom={gpus.some(
+                    (gpu) => (gpu.gpu_max || 0) > (gpu.gpu_total || 0)
+                  )}
+                />
               )}
             </div>
           </div>
@@ -953,17 +1024,26 @@ export function InfrastructureSection({
                           </NonCapitalizedTooltip>
                         </td>
                         <td className="p-3 text-gray-500 tabular-nums whitespace-nowrap">
-                          <span
-                            className={`font-semibold ${
-                              typeEntry.gpu_free > 0
-                                ? 'text-gray-600'
-                                : 'text-gray-500'
-                            }`}
-                          >
-                            {typeEntry.gpu_free.toLocaleString()}
-                          </span>
-                          {' of '}
-                          {typeEntry.gpu_total.toLocaleString()} free
+                          <div>
+                            <span
+                              className={`font-semibold ${
+                                typeEntry.gpu_free > 0
+                                  ? 'text-gray-600'
+                                  : 'text-gray-500'
+                              }`}
+                            >
+                              {typeEntry.gpu_free.toLocaleString()}
+                            </span>
+                            {' of '}
+                            {typeEntry.gpu_total.toLocaleString()} free
+                          </div>
+                          {Number.isFinite(typeEntry.gpu_min) &&
+                            Number.isFinite(typeEntry.gpu_max) && (
+                              <div className="text-[11px] text-gray-400">
+                                {typeEntry.gpu_min.toLocaleString()} min ·{' '}
+                                {typeEntry.gpu_max.toLocaleString()} max
+                              </div>
+                            )}
                         </td>
                         <td className="p-3">
                           <CleanUtilizationBar
@@ -4073,7 +4153,11 @@ export function GPUs() {
           <div className="bg-white rounded-lg border p-5 mb-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Total</h2>
-              <UtilizationLegend />
+              <UtilizationLegend
+                showHeadroom={totalGPUs.some(
+                  (gpu) => (gpu.gpu_max || 0) > (gpu.gpu_total || 0)
+                )}
+              />
             </div>
             <GpuTypeSummaryStrip gpus={totalGPUs} />
           </div>

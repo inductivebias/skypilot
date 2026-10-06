@@ -4276,6 +4276,238 @@ def _get_custom_resource(
     )
 
 
+def _gke_total_node_bound(node_pool: Dict[str, Any], field: str) -> int:
+    """Return a GKE node-pool autoscaling bound as a total node count."""
+    autoscaling = node_pool.get('autoscaling', {})
+    total_field = f'total{field[0].upper()}{field[1:]}NodeCount'
+    if total_field in autoscaling:
+        value = autoscaling[total_field]
+    else:
+        value = autoscaling.get(f'{field}NodeCount', 0)
+        value *= max(1, len(node_pool.get('locations', [])))
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f'GKE {field} node count must be non-negative')
+    return value
+
+
+_ACCELERATORS_PER_NODE_ANNOTATION = ('skypilot.co/accelerators-per-node')
+
+
+def _nonnegative_int(value: Any, field: str) -> int:
+    """Parse a non-negative integer from a Kubernetes resource field."""
+    if isinstance(value, str):
+        try:
+            value = int(value)
+        except ValueError as error:
+            raise ValueError(
+                f'{field} must be a non-negative integer') from error
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f'{field} must be a non-negative integer')
+    return value
+
+
+def _accelerators_per_node(resource: Dict[str, Any]) -> int:
+    resource_annotations = resource.get('metadata', {}).get('annotations', {})
+    return _nonnegative_int(
+        resource_annotations.get(_ACCELERATORS_PER_NODE_ANNOTATION),
+        _ACCELERATORS_PER_NODE_ANNOTATION)
+
+
+def _list_cluster_custom_objects(context: str, group: str, version: str,
+                                 plural: str) -> List[Dict[str, Any]]:
+    """List one optional capacity API, failing open when it is unavailable."""
+    try:
+        response = kubernetes.custom_resources_api(
+            context).list_cluster_custom_object(group=group,
+                                                version=version,
+                                                plural=plural)
+    except Exception as error:  # pylint: disable=broad-except
+        # Capacity is optional dashboard decoration. A missing CRD or read
+        # permission must not make the underlying Kubernetes inventory fail.
+        logger.debug('Kubernetes autoscaling capacity %s/%s unavailable: %s',
+                     group,
+                     plural,
+                     error,
+                     exc_info=True)
+        return []
+    items = response.get('items', [])
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _get_cks_autoscaling_capacity(
+        context: str) -> List[models.KubernetesAutoscalingCapacity]:
+    """Read every autoscaled CoreWeave NodePool in one context."""
+    node_pools = _list_cluster_custom_objects(context,
+                                              group='compute.coreweave.com',
+                                              version='v1alpha1',
+                                              plural='nodepools')
+    capacities = []
+    for node_pool in node_pools:
+        spec = node_pool.get('spec', {})
+        if spec.get('autoscaling') is not True:
+            continue
+        name = node_pool.get('metadata', {}).get('name')
+        accelerator_type = spec.get('nodeLabels',
+                                    {}).get(SkyPilotLabelFormatter.LABEL_KEY)
+        try:
+            accelerators_per_node = _accelerators_per_node(node_pool)
+            current_nodes = _nonnegative_int(
+                node_pool.get('status', {}).get('currentNodes'),
+                'status.currentNodes')
+            min_nodes = _nonnegative_int(spec.get('minNodes'), 'spec.minNodes')
+            max_nodes = _nonnegative_int(spec.get('maxNodes'), 'spec.maxNodes')
+        except ValueError:
+            logger.debug('Ignoring malformed CoreWeave NodePool %s', name or
+                         '<unnamed>')
+            continue
+        if (not isinstance(name, str) or not name or
+                not isinstance(accelerator_type, str) or not accelerator_type or
+                accelerators_per_node <= 0 or max_nodes < min_nodes):
+            continue
+        capacities.append(
+            models.KubernetesAutoscalingCapacity(
+                node_pool=name,
+                accelerator_type=(
+                    SkyPilotLabelFormatter.get_accelerator_from_label_value(
+                        accelerator_type)),
+                accelerators_per_node=accelerators_per_node,
+                current_nodes=current_nodes,
+                min_nodes=min_nodes,
+                max_nodes=max_nodes,
+            ))
+    return capacities
+
+
+def _get_karpenter_autoscaling_capacity(
+        context: str) -> List[models.KubernetesAutoscalingCapacity]:
+    """Read dynamic Karpenter NodePools with explicit node ceilings."""
+    node_pools = _list_cluster_custom_objects(context,
+                                              group='karpenter.sh',
+                                              version='v1',
+                                              plural='nodepools')
+    capacities = []
+    for node_pool in node_pools:
+        spec = node_pool.get('spec', {})
+        # Karpenter pools with replicas are static capacity, not autoscaling
+        # headroom. Dynamic pools have no minimum node count.
+        if 'replicas' in spec:
+            continue
+        name = node_pool.get('metadata', {}).get('name')
+        labels = spec.get('template', {}).get('metadata', {}).get('labels', {})
+        accelerator_type = labels.get(SkyPilotLabelFormatter.LABEL_KEY)
+        try:
+            accelerators_per_node = _accelerators_per_node(node_pool)
+            current_nodes = _nonnegative_int(
+                node_pool.get('status', {}).get('nodes'), 'status.nodes')
+            max_nodes = _nonnegative_int(
+                spec.get('limits', {}).get('nodes'), 'spec.limits.nodes')
+        except ValueError:
+            logger.debug('Ignoring malformed Karpenter NodePool %s', name or
+                         '<unnamed>')
+            continue
+        if (not isinstance(name, str) or not name or
+                not isinstance(accelerator_type, str) or not accelerator_type or
+                accelerators_per_node <= 0):
+            continue
+        capacities.append(
+            models.KubernetesAutoscalingCapacity(
+                node_pool=name,
+                accelerator_type=(
+                    SkyPilotLabelFormatter.get_accelerator_from_label_value(
+                        accelerator_type)),
+                accelerators_per_node=accelerators_per_node,
+                current_nodes=current_nodes,
+                min_nodes=0,
+                max_nodes=max_nodes,
+            ))
+    return capacities
+
+
+def _get_gke_autoscaling_capacity(
+        context: str,
+        nodes: List[Any]) -> List[models.KubernetesAutoscalingCapacity]:
+    """Read live bounds for every autoscaled GKE accelerator node pool."""
+    valid, project_id, location, cluster_name = (
+        GKEAutoscaler._validate_context_name(  # pylint: disable=protected-access
+            context))
+    if not valid:
+        return []
+    try:
+        container_service = gcp.build('container',
+                                      'v1',
+                                      credentials=None,
+                                      cache_discovery=False)
+        cluster = container_service.projects().locations().clusters().get(
+            name=f'projects/{project_id}/locations/{location}/clusters/'
+            f'{cluster_name}').execute()
+    except ImportError:
+        logger.debug('GCP dependencies unavailable; omitting GKE capacity')
+        return []
+    except Exception as error:  # pylint: disable=broad-except
+        # Capacity decoration is optional and must not make the underlying
+        # Kubernetes inventory unavailable when GKE metadata cannot be read.
+        logger.debug('GKE autoscaling capacity unavailable: %s',
+                     error,
+                     exc_info=True)
+        return []
+
+    current_nodes = collections.Counter(
+        node.metadata.labels.get('cloud.google.com/gke-nodepool')
+        for node in nodes)
+    capacities = []
+    for node_pool in cluster.get('nodePools', []):
+        if node_pool.get('autoscaling', {}).get('enabled') is not True:
+            continue
+        accelerators = node_pool.get('config', {}).get('accelerators', [])
+        if len(accelerators) != 1:
+            continue
+        accelerator = accelerators[0]
+        accelerator_type = accelerator.get('acceleratorType')
+        try:
+            accelerators_per_node = int(accelerator.get('acceleratorCount', 0))
+            min_nodes = _gke_total_node_bound(node_pool, 'min')
+            max_nodes = _gke_total_node_bound(node_pool, 'max')
+        except (TypeError, ValueError):
+            logger.debug('Ignoring malformed GKE autoscaling bounds for %s',
+                         node_pool.get('name', '<unnamed>'))
+            continue
+        if (not accelerator_type or accelerators_per_node <= 0 or
+                max_nodes < min_nodes):
+            continue
+        name = node_pool.get('name')
+        if not isinstance(name, str) or not name:
+            continue
+        capacities.append(
+            models.KubernetesAutoscalingCapacity(
+                node_pool=name,
+                accelerator_type=(
+                    GKELabelFormatter.get_accelerator_from_label_value(
+                        accelerator_type)),
+                accelerators_per_node=accelerators_per_node,
+                current_nodes=current_nodes[name],
+                min_nodes=min_nodes,
+                max_nodes=max_nodes,
+            ))
+    return capacities
+
+
+def _get_kubernetes_autoscaling_capacity(
+        context: Optional[str],
+        nodes: List[Any]) -> List[models.KubernetesAutoscalingCapacity]:
+    """Discover autoscaling capacity without context or pool allowlists."""
+    if context is None:
+        return []
+    valid_gke_context, _, _, _ = (
+        GKEAutoscaler._validate_context_name(  # pylint: disable=protected-access
+            context))
+    if valid_gke_context:
+        return _get_gke_autoscaling_capacity(context, nodes)
+    return (_get_cks_autoscaling_capacity(context) +
+            _get_karpenter_autoscaling_capacity(context))
+
+
 def get_kubernetes_node_info(
     context: Optional[str] = None,
     custom_resource: Optional[Dict[str,
@@ -4528,6 +4760,8 @@ def get_kubernetes_node_info(
         node_info_dict=node_info_dict,
         hint=hint,
         custom_resource=_get_custom_resource(context, custom_resource),
+        autoscaling_capacity=_get_kubernetes_autoscaling_capacity(
+            context, nodes),
     )
 
 

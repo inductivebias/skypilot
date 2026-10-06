@@ -10,7 +10,7 @@ from sky.skylet import constants
 # based on version info is needed.
 # For more details and code guidelines, refer to:
 # https://docs.skypilot.co/en/latest/developers/CONTRIBUTING.html#backward-compatibility-guidelines
-API_VERSION = 58  # optional Kubernetes custom-resource snapshot
+API_VERSION = 59  # live Kubernetes autoscaling capacity bounds
 
 # The minimum peer API version that the code should still work with.
 # Notes (dev):
@@ -86,6 +86,10 @@ MIN_JOB_NODE_HISTORY_API_VERSION = 57
 # Minimum API version that can include one exact custom resource in the
 # Kubernetes node-info snapshot.
 MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION = 58
+
+# Minimum API version that includes live autoscaled node-pool bounds in a
+# Kubernetes node-info snapshot.
+MIN_KUBERNETES_AUTOSCALING_CAPACITY_API_VERSION = 59
 
 # Prefix for API request names.
 REQUEST_NAME_PREFIX = 'sky.'
