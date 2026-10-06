@@ -50,6 +50,22 @@ export function getSubmittedBy(job) {
   return job?.user || job?.user_name || 'N/A';
 }
 
+export function getSmIdleSummary(gpuHours, smActiveMean) {
+  const activePercent = Number(smActiveMean);
+  if (smActiveMean == null || !Number.isFinite(activePercent)) {
+    return { percent: null, gpuHours: null };
+  }
+
+  const percent = 100 - Math.min(100, Math.max(0, activePercent));
+  return {
+    percent,
+    gpuHours:
+      gpuHours == null || !Number.isFinite(Number(gpuHours))
+        ? null
+        : Number(gpuHours) * (percent / 100),
+  };
+}
+
 export function getJobEfficiencySummary(job, tasks = []) {
   const records = tasks.length > 0 ? tasks : [job];
   let gpuHours = 0;

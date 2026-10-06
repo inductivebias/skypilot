@@ -59,6 +59,7 @@ def test_summarize_series_calculates_percentiles_and_latest_progress():
     ])
 
     assert hardware['sm_active_percent'] == {
+        'mean': 20.0,
         'p10': 4.0,
         'p25': 10.0,
         'p50': 20.0,

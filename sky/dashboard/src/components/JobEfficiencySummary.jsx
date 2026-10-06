@@ -3,7 +3,11 @@ import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import PropTypes from 'prop-types';
 
 import { useJobEfficiencyMetrics } from '@/data/connectors/jobs';
-import { getGpuCount, getJobEfficiencySummary } from '@/utils/jobEfficiency';
+import {
+  getGpuCount,
+  getJobEfficiencySummary,
+  getSmIdleSummary,
+} from '@/utils/jobEfficiency';
 
 const HARDWARE_ROWS = [
   ['SM active', 'sm_active_percent', 'percent'],
@@ -47,6 +51,14 @@ function formatHardware(value, unit) {
   return formatNumber(value);
 }
 
+function formatSmIdle(idle) {
+  if (idle.percent == null) return 'N/A';
+  const percent = `${formatNumber(idle.percent, 1)}%`;
+  return idle.gpuHours == null
+    ? percent
+    : `${percent} \u00b7 ${formatGpuHours(idle.gpuHours)} GPU-h`;
+}
+
 function Metric({ label, value, title }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
@@ -74,6 +86,10 @@ export function JobEfficiencySummary({ job, tasks = [] }) {
   const summary = getJobEfficiencySummary(job, tasks);
   const telemetry = useJobEfficiencyMetrics(job, tasks);
   const progress = telemetry.progress || {};
+  const smIdle = getSmIdleSummary(
+    summary.gpuHours,
+    telemetry.hardware?.sm_active_percent?.mean
+  );
   const records = tasks.length > 0 ? tasks : [job];
   const isGpuJob = records.some((record) => getGpuCount(record) > 0);
   return (
@@ -118,7 +134,12 @@ export function JobEfficiencySummary({ job, tasks = [] }) {
               title={summary.submittedBy}
             />
           </div>
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+            <Metric
+              label="Estimated SM idle"
+              value={formatSmIdle(smIdle)}
+              title="One minus mean SM-active utilization; GPU-hours are estimated across the allocated GPUs"
+            />
             <Metric
               label="Steps/second"
               value={formatNumber(progress.steps_per_second)}

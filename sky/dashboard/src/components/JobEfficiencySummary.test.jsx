@@ -18,6 +18,7 @@ describe('JobEfficiencySummary', () => {
       },
       hardware: {
         sm_active_percent: {
+          mean: 25,
           p10: 10,
           p25: 25,
           p50: 50,
@@ -43,6 +44,7 @@ describe('JobEfficiencySummary', () => {
     expect(screen.getByText('3.5')).toBeInTheDocument();
     expect(screen.getByText('250 TFLOP/s')).toBeInTheDocument();
     expect(screen.getByText('47.5%')).toBeInTheDocument();
+    expect(screen.getByText('75% \u00b7 0.75 GPU-h')).toBeInTheDocument();
     expect(screen.getByText('SM active')).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument();
     expect(screen.getAllByText('N/A').length).toBeGreaterThan(0);
@@ -76,6 +78,7 @@ describe('JobEfficiencySummary', () => {
     );
 
     expect(screen.getByText('GPU-hours')).toBeInTheDocument();
+    expect(screen.getByText('Estimated SM idle')).toBeInTheDocument();
     expect(screen.getByText('0.000')).toBeInTheDocument();
     expect(
       screen.getByText(

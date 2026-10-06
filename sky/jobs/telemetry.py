@@ -151,6 +151,8 @@ def _summarize_series(
                 f'p{percentile}': _percentile(values, percentile)
                 for percentile in _PERCENTILES
             }
+            if name == 'sm_active_percent':
+                hardware[name]['mean'] = sum(values) / len(values)
     progress = {
         name: latest_progress[name][1]
         for name in _PROGRESS_METRICS
