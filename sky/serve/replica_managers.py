@@ -1041,7 +1041,7 @@ class SkyPilotReplicaManager(ReplicaManager):
         log_file_name = serve_utils.generate_replica_log_file_name(
             self._service_name, replica_id)
 
-        def _download_and_stream_logs(info: ReplicaInfo):
+        def _download_logs(info: ReplicaInfo):
             launch_log_file_name = (
                 serve_utils.generate_replica_launch_log_file_name(
                     self._service_name, replica_id))
@@ -1066,16 +1066,17 @@ class SkyPilotReplicaManager(ReplicaManager):
             replica_job_logs_dir = os.path.join(constants.SKY_LOGS_DIRECTORY,
                                                 'replica_jobs')
             job_ids = ['1'] if self._is_pool else None
-            job_log_file_name = controller_utils.download_and_stream_job_log(
+            job_log_file_name = controller_utils.download_job_log(
                 backend, handle, replica_job_logs_dir, job_ids)
             if job_log_file_name is not None:
-                logger.info(f'\n== End of logs (Replica: {replica_id}) ==')
                 with open(log_file_name, 'a',
                           encoding='utf-8') as replica_log_file, open(
                               os.path.expanduser(job_log_file_name),
                               'r',
                               encoding='utf-8') as job_file:
                     replica_log_file.write(job_file.read())
+                logger.info(f'Archived logs for replica {replica_id} at '
+                            f'{log_file_name}.')
             else:
                 with open(log_file_name, 'a',
                           encoding='utf-8') as replica_log_file:
@@ -1089,7 +1090,7 @@ class SkyPilotReplicaManager(ReplicaManager):
         assert info is not None
 
         if sync_down_logs:
-            _download_and_stream_logs(info)
+            _download_logs(info)
 
         logger.info(f'preempted: {info.status_property.preempted}, '
                     f'replica_id: {replica_id}')

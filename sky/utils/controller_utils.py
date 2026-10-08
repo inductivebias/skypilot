@@ -34,7 +34,6 @@ from sky.server import plugins
 from sky.server.blob import blob_storage as bs
 from sky.setup_files import dependencies
 from sky.skylet import constants
-from sky.skylet import log_lib
 from sky.usage import constants as usage_constants
 from sky.utils import annotations
 from sky.utils import command_runner
@@ -466,23 +465,21 @@ def check_cluster_name_not_controller(
 
 
 # Internal only:
-def download_and_stream_job_log(
+def download_job_log(
         backend: 'cloud_vm_ray_backend.CloudVmRayBackend',
         handle: 'cloud_vm_ray_backend.CloudVmRayResourceHandle',
         local_dir: str,
         job_ids: Optional[List[str]] = None,
         on_downloaded: Optional[Callable[[str], None]] = None) -> Optional[str]:
-    """Downloads and streams the latest job log.
+    """Downloads the latest job log without replaying it to controller stdout.
 
     This function is only used by jobs controller and sky serve controller.
 
     Args:
         on_downloaded: Optional callback invoked with the local log path as
-            soon as the log has been synced down, BEFORE the (potentially
-            slow) re-streaming of the log into the controller log. The jobs
-            controller uses this to persist ``local_log_file`` immediately so
-            the dashboard can serve the job's logs without waiting for the
-            full re-stream to finish.
+            soon as the log has been synced down. The jobs controller uses
+            this to persist ``local_log_file`` so ``sky jobs logs`` can serve
+            the downloaded log after the worker cluster is removed.
 
     If the log cannot be fetched for any reason, return None.
     """
@@ -517,52 +514,10 @@ def download_and_stream_job_log(
     log_dir = list(log_dirs.values())[0]
     log_file = os.path.expanduser(os.path.join(log_dir, 'run.log'))
 
-    # The log is now on local disk. Notify the caller immediately so it can
-    # persist the path (e.g. local_log_file) before the slow re-stream below,
-    # which can take minutes for multi-GB logs and would otherwise block the
-    # dashboard from serving the logs.
+    # The log is now on local disk. Notify the caller so it can persist the path
+    # (e.g. local_log_file) before the worker cluster is removed.
     if on_downloaded is not None:
         on_downloaded(log_file)
-
-    # Print the logs to the console.
-    # TODO(zhwu): refactor this into log_utils, along with the refactoring for
-    # the log_lib.tail_logs.
-    try:
-        # newline='\n' so we split lines ONLY on '\n'. The default
-        # universal-newline mode treats every '\r' as a line boundary, which
-        # for carriage-return progress output (e.g. `aws s3 cp`'s in-place
-        # "Completed X GiB ..." updates) explodes a multi-GB log into millions
-        # of "lines" -- making this loop O(carriage-returns) (minutes for a
-        # ~160MB log) and bloating the controller log accordingly. Splitting
-        # only on '\n' keeps it O(real lines). We also drop the per-line
-        # flush: stdout is block-buffered (~8KB), so a hard crash loses at
-        # most the last buffer, not the whole copy -- and the authoritative
-        # copy is the synced run.log on disk anyway. errors='replace' so a
-        # stray invalid-UTF-8 byte in the user log can't abort the copy
-        # mid-stream (matches log_lib's decode handling).
-        with open(log_file,
-                  'r',
-                  encoding='utf-8',
-                  newline='\n',
-                  errors='replace') as f:
-            # Stream the logs to the console without reading the whole file into
-            # memory.
-            start_streaming = False
-            for line in f:
-                if log_lib.LOG_FILE_START_STREAMING_AT in line:
-                    start_streaming = True
-                if start_streaming:
-                    print(line, end='')
-        # Flush once after the full copy instead of once per line.
-        print(end='', flush=True)
-    except FileNotFoundError:
-        logger.error('Failed to find the logs for the user '
-                     f'program at {log_file}.')
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            f'Failed to stream the logs for the user program at '
-            f'{log_file}: {common_utils.format_exception(e)}',
-            exc_info=True)
 
     return log_file
 

@@ -271,15 +271,10 @@ class JobController:
         handle: Optional['cloud_vm_ray_backend.CloudVmRayResourceHandle'],
         job_id_on_pool_cluster: Optional[int],
     ) -> None:
-        """Downloads and streams the logs of the current job with given task ID.
-
-        We do not stream the logs from the cluster directly, as the
-        download and stream should be faster, and more robust against
-        preemptions or ssh disconnection during the streaming.
-        """
+        """Downloads logs for durable reads after the worker is removed."""
         if handle is None:
             logger.info(f'Cluster for job {self._job_id} is not found. '
-                        'Skipping downloading and streaming the logs.')
+                        'Skipping log download.')
             return
 
         managed_job_logs_dir = os.path.join(constants.SKY_LOGS_DIRECTORY,
@@ -288,12 +283,7 @@ class JobController:
 
         def _persist_local_log_file(local_log_file: str) -> None:
             # Persist the log path for the current task so it can be accessed
-            # after the job finishes. Do this as early as possible -- right
-            # after the log is synced down, before the (potentially minutes-
-            # long for multi-GB logs) re-stream into the controller log --
-            # so the dashboard can serve the job's logs immediately instead
-            # of showing "already in terminal state" until the re-stream
-            # completes.
+            # after the job finishes and the worker cluster is removed.
             managed_job_state.set_local_log_file(self._job_id, task_id,
                                                  local_log_file)
 
@@ -304,7 +294,7 @@ class JobController:
             if log_file is not None:
                 _persist_local_log_file(log_file)
         if log_file is None:
-            log_file = controller_utils.download_and_stream_job_log(
+            log_file = controller_utils.download_job_log(
                 self._backend,
                 handle,
                 managed_job_logs_dir,
@@ -315,8 +305,11 @@ class JobController:
             logger.warning(
                 f'No log file was downloaded for job {self._job_id}, '
                 f'task {task_id}')
-
-        logger.info(f'\n== End of logs (ID: {self._job_id}) ==')
+        else:
+            logger.info(
+                f'Logs for managed job {self._job_id}, task {task_id} were '
+                f'downloaded. Run `sky jobs logs {self._job_id} --no-follow` '
+                'to read them.')
 
     async def _cleanup_cluster(self, cluster_name: Optional[str]) -> None:
         if cluster_name is None:
@@ -859,14 +852,14 @@ class JobController:
                     if clusters:
                         assert len(clusters) == 1, (clusters, cluster_name)
                         handle = clusters[0].get('handle')
-                        # Best effort to download and stream the logs.
+                        # Best effort to download the logs before cleanup.
                         await asyncio.to_thread(self.download_log_and_stream,
                                                 task_id, handle,
                                                 job_id_on_pool_cluster)
                 except Exception as e:  # pylint: disable=broad-except
                     # We don't want to crash here, so just log and continue.
                     logger.warning(
-                        f'Failed to download and stream logs: '
+                        f'Failed to download logs: '
                         f'{common_utils.format_exception(e)}',
                         exc_info=True)
 

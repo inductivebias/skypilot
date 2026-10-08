@@ -723,7 +723,7 @@ class TestTerminalStatuses:
 
 class TestStreamReplicaLogsZeroByteFallback:
     """`replica_<id>.log` is the teardown archive (only written by
-    terminate_cluster's redirect_log or _download_and_stream_logs). Once
+    terminate_cluster's redirect_log or _download_logs). Once
     the teardown path runs and crashes mid-flight (or terminate_cluster is
     invoked on a replica that never provisioned a cluster), a 0-byte
     `replica_<id>.log` is left on disk.

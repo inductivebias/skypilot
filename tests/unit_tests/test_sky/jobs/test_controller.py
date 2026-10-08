@@ -786,6 +786,33 @@ class TestTaskCleanup:
         assert not mount_1.exists(), 'mount_1 should be cleaned up'
 
 
+def test_download_log_and_stream_reports_log_reader_command():
+    """Completion reports where to read logs without replaying their payload."""
+    controller = JobController.__new__(JobController)
+    controller._job_id = 7
+    controller._backend = MagicMock()
+    handle = MagicMock()
+
+    def download_log(*args, on_downloaded, **kwargs):
+        del args, kwargs
+        on_downloaded('/tmp/run.log')
+        return '/tmp/run.log'
+
+    with patch('sky.jobs.controller.controller_utils.download_job_log',
+               side_effect=download_log), \
+         patch('sky.jobs.controller.managed_job_state.set_local_log_file'
+              ) as set_local_log_file, \
+         patch('sky.jobs.controller.logger.info') as logger_info:
+        controller.download_log_and_stream(task_id=0,
+                                           handle=handle,
+                                           job_id_on_pool_cluster=1)
+
+    set_local_log_file.assert_called_once_with(7, 0, '/tmp/run.log')
+    logger_info.assert_called_once_with(
+        'Logs for managed job 7, task 0 were downloaded. '
+        'Run `sky jobs logs 7 --no-follow` to read them.')
+
+
 class TestDownloadLogsForCancelledJob:
     """Tests for ControllerManager._download_logs_for_cancelled_job.
 
