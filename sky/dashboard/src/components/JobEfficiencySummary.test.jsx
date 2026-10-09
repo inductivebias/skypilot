@@ -81,7 +81,7 @@ describe('JobEfficiencySummary', () => {
 
     expect(screen.getByText('GPU-hours')).toBeInTheDocument();
     expect(screen.getByText('Estimated SM idle')).toBeInTheDocument();
-    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
+    expect(screen.getByText('N/A')).toBeInTheDocument();
     expect(screen.getByText('0.000')).toBeInTheDocument();
     expect(
       screen.getByText(

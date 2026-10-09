@@ -20,6 +20,7 @@ const HARDWARE_ROWS = [
 ];
 const PERCENTILES = ['p10', 'p25', 'p50', 'p75', 'p99'];
 const UNKNOWN_VALUE = 'Unknown';
+const NOT_APPLICABLE_VALUE = 'N/A';
 
 function formatGpuHours(value) {
   if (value == null) return UNKNOWN_VALUE;
@@ -140,7 +141,7 @@ export function JobEfficiencySummary({ job, tasks = [] }) {
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
             <Metric
               label="Estimated SM idle"
-              value={formatSmIdle(smIdle)}
+              value={isGpuJob ? formatSmIdle(smIdle) : NOT_APPLICABLE_VALUE}
               title="One minus mean SM-active utilization; GPU-hours are estimated across the allocated GPUs"
             />
             <Metric
@@ -197,7 +198,7 @@ export function JobEfficiencySummary({ job, tasks = [] }) {
                         >
                           {telemetry.hardware?.[key]?.[percentile] == null
                             ? isSingleGpuJob && key.startsWith('nvlink_')
-                              ? 'N/A'
+                              ? NOT_APPLICABLE_VALUE
                               : UNKNOWN_VALUE
                             : formatHardware(
                                 telemetry.hardware[key][percentile],
