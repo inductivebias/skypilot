@@ -149,7 +149,7 @@ def _handle_io_stream(io_stream, out_stream, args: _ProcessingArgs):
                 ctx = _get_context()
                 if ctx is not None and ctx.is_canceled():
                     return
-                line = out_io.readline(DEFAULT_LOG_CHUNK_SIZE)
+                line = out_io.readline(16 * 1024)
                 if not line:
                     break
                 # start_streaming_at logic in processor.process_line(line)
