@@ -1,11 +1,53 @@
 """Unit tests for skylet log_lib."""
 
+import io
 from io import StringIO
 import subprocess
 import tempfile
 import unittest
 
 from sky.skylet import log_lib
+
+
+class _BoundedReadlineStream(io.BytesIO):
+
+    def readline(self, size: int = -1) -> bytes:
+        if size <= 0:
+            raise AssertionError('log reads must have a fixed size limit')
+        return super().readline(size)
+
+
+class TestHandleIoStream(unittest.TestCase):
+    """Test cases for bounded subprocess stream processing."""
+
+    def test_long_line_is_chunked_without_retaining_output(self):
+        payload = b'x' * (log_lib.DEFAULT_LOG_CHUNK_SIZE * 2 + 1)
+        stream = _BoundedReadlineStream(payload)
+        with tempfile.NamedTemporaryFile(suffix='.log') as log_file:
+            args = log_lib._ProcessingArgs(  # pylint: disable=protected-access
+                log_file.name,
+                stream_logs=False,
+                capture_output=False)
+
+            output = log_lib._handle_io_stream(  # pylint: disable=protected-access
+                stream, StringIO(), args)
+
+            self.assertEqual(output, '')
+            with open(log_file.name, 'rb') as persisted_log:
+                self.assertEqual(persisted_log.read(), payload)
+
+    def test_requested_output_is_returned(self):
+        payload = b'hello\n'
+        with tempfile.NamedTemporaryFile(suffix='.log') as log_file:
+            args = log_lib._ProcessingArgs(  # pylint: disable=protected-access
+                log_file.name,
+                stream_logs=False,
+                capture_output=True)
+
+            output = log_lib._handle_io_stream(  # pylint: disable=protected-access
+                _BoundedReadlineStream(payload), StringIO(), args)
+
+        self.assertEqual(output, payload.decode())
 
 
 class TestLogBuffer(unittest.TestCase):

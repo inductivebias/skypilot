@@ -107,7 +107,8 @@ class _ProcessingArgs:
                  skip_lines: Optional[List[str]] = None,
                  replace_crlf: bool = False,
                  line_processor: Optional[log_utils.LineProcessor] = None,
-                 streaming_prefix: Optional[str] = None) -> None:
+                 streaming_prefix: Optional[str] = None,
+                 capture_output: bool = False) -> None:
         self.log_path = log_path
         self.stream_logs = stream_logs
         self.start_streaming_at = start_streaming_at
@@ -116,6 +117,7 @@ class _ProcessingArgs:
         self.replace_crlf = replace_crlf
         self.line_processor = line_processor
         self.streaming_prefix = streaming_prefix
+        self.capture_output = capture_output
 
 def _get_context():
     # TODO(aylei): remove this after we drop the backward-compatibility for
@@ -147,7 +149,7 @@ def _handle_io_stream(io_stream, out_stream, args: _ProcessingArgs):
                 ctx = _get_context()
                 if ctx is not None and ctx.is_canceled():
                     return
-                line = out_io.readline()
+                line = out_io.readline(16 * 1024)
                 if not line:
                     break
                 # start_streaming_at logic in processor.process_line(line)
@@ -177,7 +179,8 @@ def _handle_io_stream(io_stream, out_stream, args: _ProcessingArgs):
                     fout.write(line)
                     fout.flush()
                 line_processor.process_line(line)
-                out.append(line)
+                if args.capture_output:
+                    out.append(line)
     return ''.join(out)
 
 def process_subprocess_stream(proc, stdout_stream_handler,
@@ -318,6 +321,7 @@ def run_with_log(
                     # Replace CRLF when the output is logged to driver by ray.
                     replace_crlf=with_ray,
                     streaming_prefix=formatted_streaming_prefix,
+                    capture_output=require_outputs,
                 )
                 stdout_stream_handler = functools.partial(
                     _handle_io_stream,
@@ -459,6 +463,11 @@ def run_bash_command_with_log(bash_command: str,
 
         # Need this `-i` option to make sure `source ~/.bashrc` work.
         inner_command = f'/bin/bash -i {script_path}'
+
+        # Task logs are a convenience, not an unbounded storage allocation.
+        # Keep draining after the limit so a noisy workload never blocks.
+        inner_command = job_lib.make_bounded_log_command(
+            inner_command, constants.JOB_LOG_MAX_BYTES)
 
         return run_with_log(inner_command,
                             log_path,
