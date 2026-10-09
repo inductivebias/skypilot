@@ -96,11 +96,11 @@ def make_bounded_log_command(command: str,
 
 def make_job_run_command(job_id: int, script_path: str, log_path: str) -> str:
     """Build a job command whose persisted output has a fixed byte limit."""
-    command = f'{constants.SKY_PYTHON_CMD} -u {_quote_remote_path(script_path)}'
-    command = make_bounded_log_command(command, constants.JOB_LOG_MAX_BYTES,
-                                       log_path)
-    return (f'{JOB_CMD_IDENTIFIER.format(job_id)} && '
-            f'{command}')
+    command = (f'{JOB_CMD_IDENTIFIER.format(job_id)} && '
+               f'{constants.SKY_PYTHON_CMD} -u '
+               f'{_quote_remote_path(script_path)}')
+    return make_bounded_log_command(command, constants.JOB_LOG_MAX_BYTES,
+                                    log_path)
 
 
 def _get_lock_path(job_id: int) -> str:
