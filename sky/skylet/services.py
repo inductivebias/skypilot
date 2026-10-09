@@ -229,14 +229,8 @@ class JobsServiceImpl(jobsv1_pb2_grpc.JobsServiceServicer):
                     f.write(request.codegen)
                 os.chmod(script_path, 0o755)
 
-            job_submit_cmd = (
-                # JOB_CMD_IDENTIFIER is used for identifying the process
-                # retrieved with pid is the same driver process.
-                f'{job_lib.JOB_CMD_IDENTIFIER.format(job_id)} && '
-                f'{constants.SKY_PYTHON_CMD} -u {script_path}'
-                # Do not use &>, which is not POSIX and may not work.
-                # Note that the order of ">filename 2>&1" matters.
-                f' > {remote_log_path} 2>&1')
+            job_submit_cmd = job_lib.make_job_run_command(
+                job_id, script_path, remote_log_path)
             job_lib.scheduler.queue(job_id, job_submit_cmd)
             return jobsv1_pb2.QueueJobResponse()
         except Exception as e:  # pylint: disable=broad-except

@@ -46,6 +46,54 @@ _JOB_STATUS_LOCK = '~/.sky/locks/.job_{}.lock'
 JOB_CMD_IDENTIFIER = 'echo "SKYPILOT_JOB_ID <{}>"'
 
 
+def make_bounded_log_command(command: str,
+                             max_bytes: int,
+                             log_path: Optional[str] = None) -> str:
+    """Wrap a command so its output is drained but only partly persisted."""
+    marker = (f'\n[SkyPilot] Log exceeded the {max_bytes}-byte limit; '
+              'further output was discarded.\n').encode()
+    if len(marker) >= max_bytes:
+        raise ValueError('max_bytes must be larger than the truncation marker')
+    payload_bytes = max_bytes - len(marker)
+    filter_code = '\n'.join([
+        'import sys',
+        'source = sys.stdin.buffer',
+        'destination = sys.stdout.buffer',
+        'written = 0',
+        'truncated = False',
+        'while True:',
+        '    chunk = source.read(65536)',
+        '    if not chunk:',
+        '        break',
+        f'    remaining = {payload_bytes} - written',
+        '    if remaining > 0:',
+        '        kept = chunk[:remaining]',
+        '        destination.write(kept)',
+        '        destination.flush()',
+        '        written += len(kept)',
+        '    if len(chunk) > max(remaining, 0) and not truncated:',
+        f'        destination.write({marker!r})',
+        '        destination.flush()',
+        '        truncated = True',
+    ])
+    filter_command = (
+        f'{constants.SKY_PYTHON_CMD} -u -c {shlex.quote(filter_code)}')
+    pipeline = f'{command} 2>&1 | {filter_command}'
+    if log_path is not None:
+        pipeline += f' > {shlex.quote(log_path)}'
+    pipeline += '; exit ${PIPESTATUS[0]}'
+    return f'bash -c {shlex.quote(pipeline)}'
+
+
+def make_job_run_command(job_id: int, script_path: str, log_path: str) -> str:
+    """Build a job command whose persisted output has a fixed byte limit."""
+    command = f'{constants.SKY_PYTHON_CMD} -u {shlex.quote(script_path)}'
+    command = make_bounded_log_command(command, constants.JOB_LOG_MAX_BYTES,
+                                       log_path)
+    return (f'{JOB_CMD_IDENTIFIER.format(job_id)} && '
+            f'{command}')
+
+
 def _get_lock_path(job_id: int) -> str:
     lock_path = os.path.expanduser(_JOB_STATUS_LOCK.format(job_id))
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
