@@ -20,6 +20,29 @@ def test_make_bounded_log_command_preserves_short_output(tmp_path):
     assert log_path.read_text(encoding='utf-8') == 'hello\n'
 
 
+def test_make_bounded_log_command_expands_home_on_target(monkeypatch, tmp_path):
+    controller_home = tmp_path / 'controller-home'
+    target_home = tmp_path / 'target-home'
+    controller_home.mkdir()
+    target_home.mkdir()
+    monkeypatch.setenv('HOME', str(controller_home))
+    command = job_lib.make_bounded_log_command(
+        f'{sys.executable} -c \'print("hello")\'',
+        max_bytes=128,
+        log_path='~/run.log')
+
+    result = subprocess.run(command,
+                            shell=True,
+                            check=False,
+                            env={
+                                **os.environ, 'HOME': str(target_home)
+                            })
+
+    assert result.returncode == 0
+    assert not (controller_home / 'run.log').exists()
+    assert (target_home / 'run.log').read_text(encoding='utf-8') == 'hello\n'
+
+
 def test_make_job_run_command_bounds_log_and_preserves_exit_code(
         monkeypatch, tmp_path):
     script_path = tmp_path / 'job.py'

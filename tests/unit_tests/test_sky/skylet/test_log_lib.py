@@ -5,6 +5,7 @@ from io import StringIO
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from sky.skylet import log_lib
 
@@ -48,6 +49,24 @@ class TestHandleIoStream(unittest.TestCase):
                 _BoundedReadlineStream(payload), StringIO(), args)
 
         self.assertEqual(output, payload.decode())
+
+
+class TestFollowJobLogs(unittest.TestCase):
+
+    def test_unterminated_line_is_yielded_in_bounded_chunks(self):
+        payload = 'x' * (log_lib.DEFAULT_LOG_CHUNK_SIZE * 2) + '\n'
+        with mock.patch.object(log_lib.job_lib,
+                               'get_status_no_lock',
+                               return_value=log_lib.job_lib.JobStatus.RUNNING):
+            chunks = log_lib._follow_job_logs(  # pylint: disable=protected-access
+                StringIO(payload),
+                job_id=1,
+                start_streaming=True)
+
+            first_chunk = next(chunks)
+
+        self.assertEqual(len(first_chunk), log_lib.DEFAULT_LOG_CHUNK_SIZE)
+        self.assertEqual(first_chunk, 'x' * log_lib.DEFAULT_LOG_CHUNK_SIZE)
 
 
 class TestLogBuffer(unittest.TestCase):

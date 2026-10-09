@@ -46,6 +46,15 @@ _JOB_STATUS_LOCK = '~/.sky/locks/.job_{}.lock'
 JOB_CMD_IDENTIFIER = 'echo "SKYPILOT_JOB_ID <{}>"'
 
 
+def _quote_remote_path(path: str) -> str:
+    """Quote a path while deferring home expansion to the remote shell."""
+    if path == '~':
+        return '"$HOME"'
+    if path.startswith('~/'):
+        return f'"$HOME"/{shlex.quote(path[2:])}'
+    return shlex.quote(path)
+
+
 def make_bounded_log_command(command: str,
                              max_bytes: int,
                              log_path: Optional[str] = None) -> str:
@@ -80,7 +89,7 @@ def make_bounded_log_command(command: str,
         f'{constants.SKY_PYTHON_CMD} -u -c {shlex.quote(filter_code)}')
     pipeline = f'{command} 2>&1 | {filter_command}'
     if log_path is not None:
-        pipeline += f' > {shlex.quote(log_path)}'
+        pipeline += f' > {_quote_remote_path(log_path)}'
     pipeline += '; exit ${PIPESTATUS[0]}'
     return f'bash -c {shlex.quote(pipeline)}'
 
