@@ -47,7 +47,23 @@ export function getSubmittedBy(job) {
   if (current) return current[1];
   const transitional = name.match(/-a[1-9]\d*\.by\.([a-z0-9][a-z0-9-]*)$/i);
   if (transitional) return transitional[1];
-  return job?.user || job?.user_name || 'N/A';
+  return job?.user || job?.user_name || 'Unknown';
+}
+
+export function getSmIdleSummary(gpuHours, smActiveMean) {
+  const activePercent = Number(smActiveMean);
+  if (smActiveMean == null || !Number.isFinite(activePercent)) {
+    return { percent: null, gpuHours: null };
+  }
+
+  const percent = 100 - Math.min(100, Math.max(0, activePercent));
+  return {
+    percent,
+    gpuHours:
+      gpuHours == null || !Number.isFinite(Number(gpuHours))
+        ? null
+        : Number(gpuHours) * (percent / 100),
+  };
 }
 
 export function getJobEfficiencySummary(job, tasks = []) {

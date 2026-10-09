@@ -1,6 +1,7 @@
 import {
   getGpuCount,
   getJobEfficiencySummary,
+  getSmIdleSummary,
   getSubmittedBy,
 } from '@/utils/jobEfficiency';
 
@@ -58,6 +59,21 @@ describe('job efficiency summary', () => {
       estimatedCost: null,
       restarts: 0,
       submittedBy: 'jane',
+    });
+  });
+
+  it('computes estimated SM-idle percent and GPU-hours from mean activity', () => {
+    expect(getSmIdleSummary(5, 25)).toEqual({
+      percent: 75,
+      gpuHours: 3.75,
+    });
+    expect(getSmIdleSummary(5, null)).toEqual({
+      percent: null,
+      gpuHours: null,
+    });
+    expect(getSmIdleSummary(5, 101)).toEqual({
+      percent: 0,
+      gpuHours: 0,
     });
   });
 });
