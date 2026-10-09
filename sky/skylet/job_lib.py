@@ -80,7 +80,7 @@ def make_bounded_log_command(command: str,
         f'{constants.SKY_PYTHON_CMD} -u -c {shlex.quote(filter_code)}')
     pipeline = f'{command} 2>&1 | {filter_command}'
     if log_path is not None:
-        pipeline += f' > {shlex.quote(log_path)}'
+        pipeline += f' > {shlex.quote(os.path.expanduser(log_path))}'
     pipeline += '; exit ${PIPESTATUS[0]}'
     return f'bash -c {shlex.quote(pipeline)}'
 

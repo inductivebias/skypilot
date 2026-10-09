@@ -463,10 +463,12 @@ def _follow_job_logs(file,
     status = job_lib.get_status_no_lock(job_id)
     wait_last_logs = True
     while True:
-        tmp = file.readline()
+        tmp = file.readline(DEFAULT_LOG_CHUNK_SIZE)
         if tmp is not None and tmp != '':
             line += tmp
-            if '\n' in line or '\r' in line:
+            line_complete = '\n' in line or '\r' in line
+            chunk_full = len(line) >= DEFAULT_LOG_CHUNK_SIZE
+            if line_complete or chunk_full:
                 if start_streaming_at in line:
                     start_streaming = True
                 if start_streaming:
@@ -474,7 +476,14 @@ def _follow_job_logs(file,
                     # line when line endswith '\r' (to avoid previous line
                     # to long problem). `colorama.ansi.clear_line`
                     yield line
-                line = ''
+                    line = ''
+                elif line_complete:
+                    line = ''
+                else:
+                    # Preserve only enough overlap to recognize a streaming
+                    # marker split across two bounded reads.
+                    overlap = max(len(start_streaming_at) - 1, 0)
+                    line = line[-overlap:] if overlap else ''
         else:
             # Reach the end of the file, check the status or sleep and
             # retry.
@@ -564,7 +573,8 @@ def tail_lines_from_end(path: str,
 def _peek_head_lines(log_file: TextIO) -> List[str]:
     """Peek the head of the file."""
     lines = [
-        log_file.readline() for _ in range(PEEK_HEAD_LINES_FOR_START_STREAM)
+        log_file.readline(DEFAULT_LOG_CHUNK_SIZE)
+        for _ in range(PEEK_HEAD_LINES_FOR_START_STREAM)
     ]
     # Reset the file pointer to the beginning
     log_file.seek(0, os.SEEK_SET)
@@ -696,7 +706,9 @@ def tail_logs(job_id: Optional[int],
                         print(line, end='', flush=True)
             else:
                 with open(log_path, 'r', encoding='utf-8') as log_file:
-                    for line in log_file:
+                    for line in iter(
+                            functools.partial(log_file.readline,
+                                              DEFAULT_LOG_CHUNK_SIZE), ''):
                         if start_stream_at in line:
                             start_streaming = True
                         if start_streaming:
@@ -805,7 +817,9 @@ def tail_logs_iter(job_id: Optional[int],
                         yield line
             else:
                 with open(log_path, 'r', encoding='utf-8') as log_file:
-                    for line in log_file:
+                    for line in iter(
+                            functools.partial(log_file.readline,
+                                              DEFAULT_LOG_CHUNK_SIZE), ''):
                         if start_stream_at in line:
                             start_streaming = True
                         if start_streaming:
