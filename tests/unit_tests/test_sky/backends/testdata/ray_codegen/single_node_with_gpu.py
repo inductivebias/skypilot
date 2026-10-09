@@ -460,6 +460,11 @@ def run_bash_command_with_log(bash_command: str,
         # Need this `-i` option to make sure `source ~/.bashrc` work.
         inner_command = f'/bin/bash -i {script_path}'
 
+        # Task logs are a convenience, not an unbounded storage allocation.
+        # Keep draining after the limit so a noisy workload never blocks.
+        inner_command = job_lib.make_bounded_log_command(
+            inner_command, constants.JOB_LOG_MAX_BYTES)
+
         return run_with_log(inner_command,
                             log_path,
                             stream_logs=stream_logs,
