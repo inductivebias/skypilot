@@ -978,6 +978,9 @@ class FailoverStrategyExecutor(StrategyExecutor):
                     zone=launched_resources.zone,
                     current_node_names=current_names,
                 )
+            await asyncio.to_thread(state.set_cluster_name_on_cloud,
+                                    self.job_id, self.task_id,
+                                    handle.cluster_name_on_cloud)
         else:
             self._launched_resources = None
         return job_submitted_at

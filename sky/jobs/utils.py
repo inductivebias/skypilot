@@ -59,6 +59,7 @@ from sky.utils import debug_dump_helpers
 from sky.utils import infra_utils
 from sky.utils import log_utils
 from sky.utils import message_utils
+from sky.utils import registry
 from sky.utils import resources_utils
 from sky.utils import rich_utils
 from sky.utils import subprocess_utils
@@ -1293,6 +1294,34 @@ def generate_managed_job_cluster_name(task_name: str, job_id: int) -> str:
     return f'{cluster_name}-{job_id}'
 
 
+def _reconstruct_cluster_name_on_cloud(job: Dict[str, Any]) -> Optional[str]:
+    """Reconstruct the provider-facing name for a legacy managed job."""
+    cloud_name = job.get('cloud')
+    user_hash = job.get('user_hash')
+    task_name = job.get('task_name')
+    if (not cloud_name or not common_utils.is_valid_user_hash(user_hash) or
+            not task_name):
+        return None
+
+    try:
+        cloud = registry.CLOUD_REGISTRY.from_str(cloud_name)
+        if cloud is None:
+            return None
+        display_name = generate_managed_job_cluster_name(
+            task_name, job['job_id'])
+        suffix = f'-{user_hash}'
+        max_length = cloud.max_cluster_name_length()
+        display_name_max_length = (None if max_length is None else max_length -
+                                   len(suffix))
+        return (common_utils.make_cluster_name_on_cloud(
+            display_name,
+            max_length=display_name_max_length,
+            add_user_hash=False) + suffix)
+    except (AssertionError, ValueError):
+        # Legacy metadata is optional decoration and must not break the queue.
+        return None
+
+
 def cancel_jobs_by_id(job_ids: Optional[List[int]],
                       all_users: bool = False,
                       current_workspace: Optional[str] = None,
@@ -2419,6 +2448,8 @@ def _update_fields(fields: List[str],) -> Tuple[List[str], bool]:
             new_fields.append('task_name')
         if 'current_cluster_name' not in new_fields:
             new_fields.append('current_cluster_name')
+        if 'user_hash' not in new_fields:
+            new_fields.append('user_hash')
     # Remove _NON_DB_FIELDS
     # These fields have been mapped to the DB fields in the above code, so we
     # don't need to include them in the updated fields.
@@ -2433,7 +2464,8 @@ def _update_fields(fields: List[str],) -> Tuple[List[str], bool]:
         # as a fallback in get_managed_job_queue. These are real DB columns
         # ('cloud'/'region'/'zone' are also in _NON_DB_FIELDS and were removed
         # above, so re-add them here).
-        for field in ('cloud', 'region', 'zone', 'resources'):
+        for field in ('cloud', 'region', 'zone', 'resources',
+                      'cluster_name_on_cloud'):
             if field not in new_fields:
                 new_fields.append(field)
     return new_fields, cluster_handle_required
@@ -2779,7 +2811,11 @@ def get_managed_job_queue(
                 job['cluster_resources_full'] = (cached_resources
                                                  if cached_resources else '-')
                 job['labels'] = None
-                job['cluster_name_on_cloud'] = None
+                # The provider-facing name is persisted at launch because the
+                # telemetry label must survive terminal cluster cleanup.
+                job['cluster_name_on_cloud'] = (
+                    job.get('cluster_name_on_cloud') or
+                    _reconstruct_cluster_name_on_cloud(job))
                 job['internal_services'] = None
                 job['internal_external_ips'] = None
 

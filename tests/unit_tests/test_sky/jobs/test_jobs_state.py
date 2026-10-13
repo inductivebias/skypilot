@@ -9,10 +9,45 @@ from unittest import mock
 import filelock
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy import inspect
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from sky.jobs import state
 from sky.skylet import constants
+
+
+def test_create_table_upgrades_cluster_name_on_cloud_from_revision_021(
+        tmp_path, monkeypatch):
+    db_path = tmp_path / 'managed_jobs_revision_021.db'
+    engine = create_engine(f'sqlite:///{db_path}')
+    with engine.begin() as connection:
+        connection.execute(
+            text('CREATE TABLE spot (job_id INTEGER PRIMARY KEY)'))
+        connection.execute(
+            text('CREATE TABLE alembic_version_spot_jobs_db '
+                 '(version_num VARCHAR(32) NOT NULL)'))
+        connection.execute(
+            text("INSERT INTO alembic_version_spot_jobs_db VALUES ('021')"))
+
+    @contextlib.contextmanager
+    def _tmp_db_lock(_section: str):
+        lock_path = tmp_path / '.spot_jobs_db.lock'
+        with filelock.FileLock(str(lock_path), timeout=10):
+            yield
+
+    monkeypatch.setattr(state.migration_utils, 'db_lock', _tmp_db_lock)
+
+    state.create_table(engine)
+
+    assert 'cluster_name_on_cloud' in {
+        column['name'] for column in inspect(engine).get_columns('spot')
+    }
+    with engine.connect() as connection:
+        revision = connection.execute(
+            text('SELECT version_num FROM '
+                 'alembic_version_spot_jobs_db')).scalar_one()
+    assert revision == '022'
 
 
 @pytest.fixture
@@ -743,6 +778,8 @@ class TestGetManagedJobsWithFilters:
                             cloud='Kubernetes',
                             region='cks-use06a',
                             current_node_names=['node-old'])
+        state.set_cluster_name_on_cloud(current_job_id, 0,
+                                        'managed-job-3-user2')
         state.set_job_infra(current_job_id, current_node_names=['node-current'])
         state.set_job_infra(finished_job_id,
                             cloud='Kubernetes',
@@ -753,12 +790,13 @@ class TestGetManagedJobsWithFilters:
             cloud='Kubernetes',
             region='cks-use06a',
             require_node_names=True,
-            fields=['job_id', 'node_name_lineage'])
+            fields=['job_id', 'node_name_lineage', 'cluster_name_on_cloud'])
 
         assert total == 1
         assert jobs[0]['job_id'] == current_job_id
         assert jobs[0]['node_name_lineage'] == (
             '[["node-old", "node-current"]]')
+        assert jobs[0]['cluster_name_on_cloud'] == 'managed-job-3-user2'
 
     def test_with_pagination(self, _seed_test_jobs):
         """Test pagination with page and limit."""

@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -72,3 +73,51 @@ async def test_cancel_request_api_failure_does_not_raise(monkeypatch):
     await executor._cancel_request('launch-request')
 
     sdk_get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failover_launch_persists_provider_cluster_name(monkeypatch):
+
+    async def fake_launch(self,
+                          max_retry=3,
+                          raise_on_failure=True,
+                          recovery=False):
+        del self, max_retry, raise_on_failure, recovery
+        return 123.0
+
+    class FakeHandle:
+
+        def __init__(self):
+            self.launched_resources = SimpleNamespace(cloud='Kubernetes',
+                                                      region='cks-dev-rno2a',
+                                                      zone=None)
+            self.cached_cluster_info = None
+            self.cluster_name_on_cloud = 'job-76-2efc4401'
+
+    monkeypatch.setattr(recovery_strategy.StrategyExecutor, '_launch',
+                        fake_launch)
+    monkeypatch.setattr(recovery_strategy.backends, 'CloudVmRayResourceHandle',
+                        FakeHandle)
+    monkeypatch.setattr(recovery_strategy.global_user_state,
+                        'get_handle_from_cluster_name',
+                        mock.MagicMock(return_value=FakeHandle()))
+    set_job_infra = mock.MagicMock()
+    set_cluster_name_on_cloud = mock.MagicMock()
+    monkeypatch.setattr(recovery_strategy.state, 'set_job_infra', set_job_infra)
+    monkeypatch.setattr(recovery_strategy.state, 'set_cluster_name_on_cloud',
+                        set_cluster_name_on_cloud)
+    executor = recovery_strategy.FailoverStrategyExecutor.__new__(
+        recovery_strategy.FailoverStrategyExecutor)
+    executor.cluster_name = 'job-76'
+    executor.job_id = 76
+    executor.task_id = 0
+
+    submitted_at = await executor._launch()
+
+    assert submitted_at == 123.0
+    set_job_infra.assert_called_once_with(76,
+                                          cloud='Kubernetes',
+                                          region='cks-dev-rno2a',
+                                          zone=None,
+                                          current_node_names=None)
+    set_cluster_name_on_cloud.assert_called_once_with(76, 0, 'job-76-2efc4401')

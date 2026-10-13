@@ -107,6 +107,11 @@ spot_table = sqlalchemy.Table(
     sqlalchemy.Column('is_primary_in_job_group',
                       sqlalchemy.Boolean,
                       server_default=None),
+    # Persist the provider-facing name after launch so terminal jobs retain
+    # the telemetry label after their cluster handle is cleaned up.
+    sqlalchemy.Column('cluster_name_on_cloud',
+                      sqlalchemy.Text,
+                      server_default=None),
     # Optional plugin-provided override for the user-facing status. The core
     # state machine never reads this column; it always uses `status`. Read
     # paths (status counts, status filter, returned status) may surface this
@@ -460,6 +465,7 @@ def _get_jobs_dict(r: 'row.RowMapping') -> Dict[str, Any]:
         # Whether this task is primary (True) or auxiliary (False) in a job
         # group. NULL for non-job-group jobs.
         'is_primary_in_job_group': r.get('is_primary_in_job_group'),
+        'cluster_name_on_cloud': r.get('cluster_name_on_cloud'),
         # Execution mode: 'parallel' (job group) or 'serial' (pipeline/single)
         'execution': r.get('execution'),
         # Infrastructure columns for filtering/sorting
@@ -2190,6 +2196,19 @@ def set_current_cluster_name(job_id: int, current_cluster_name: str) -> None:
         session.query(job_info_table).filter(
             job_info_table.c.spot_job_id == job_id).update(
                 {job_info_table.c.current_cluster_name: current_cluster_name})
+        session.commit()
+
+
+@db_retries.retry
+def set_cluster_name_on_cloud(job_id: int, task_id: int,
+                              cluster_name_on_cloud: str) -> None:
+    """Persist the provider-facing cluster name for one managed-job task."""
+    engine = _db_manager.get_engine()
+    with orm.Session(engine) as session:
+        session.query(spot_table).filter(
+            spot_table.c.spot_job_id == job_id,
+            spot_table.c.task_id == task_id).update(
+                {spot_table.c.cluster_name_on_cloud: cluster_name_on_cloud})
         session.commit()
 
 
