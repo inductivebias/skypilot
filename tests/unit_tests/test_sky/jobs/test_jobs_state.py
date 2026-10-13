@@ -743,6 +743,8 @@ class TestGetManagedJobsWithFilters:
                             cloud='Kubernetes',
                             region='cks-use06a',
                             current_node_names=['node-old'])
+        state.set_cluster_name_on_cloud(current_job_id, 0,
+                                        'managed-job-3-user2')
         state.set_job_infra(current_job_id, current_node_names=['node-current'])
         state.set_job_infra(finished_job_id,
                             cloud='Kubernetes',
@@ -753,12 +755,13 @@ class TestGetManagedJobsWithFilters:
             cloud='Kubernetes',
             region='cks-use06a',
             require_node_names=True,
-            fields=['job_id', 'node_name_lineage'])
+            fields=['job_id', 'node_name_lineage', 'cluster_name_on_cloud'])
 
         assert total == 1
         assert jobs[0]['job_id'] == current_job_id
         assert jobs[0]['node_name_lineage'] == (
             '[["node-old", "node-current"]]')
+        assert jobs[0]['cluster_name_on_cloud'] == 'managed-job-3-user2'
 
     def test_with_pagination(self, _seed_test_jobs):
         """Test pagination with page and limit."""
