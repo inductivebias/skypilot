@@ -1598,12 +1598,12 @@ def _provision_status_headline(provision_msg: str) -> Optional[str]:
     return None
 
 
-def stream_logs_by_id(
-        job_id: int,
-        follow: bool = True,
-        tail: Optional[int] = None,
-        tail_offset: Optional[int] = None,
-        task: Optional[Union[str, int]] = None) -> Tuple[str, int]:
+def stream_logs_by_id(job_id: int,
+                      follow: bool = True,
+                      tail: Optional[int] = None,
+                      tail_offset: Optional[int] = None,
+                      task: Optional[Union[str, int]] = None,
+                      watch_disconnect: bool = True) -> Tuple[str, int]:
     """Stream logs by job id.
 
     Args:
@@ -1616,6 +1616,8 @@ def stream_logs_by_id(
         task: Task identifier to view logs for a specific task in a JobGroup.
             If an int, it is treated as a task ID. If a str, it is treated as
             a task name. If None, logs for all tasks are shown.
+        watch_disconnect: Whether to start the process-level disconnect
+            watchdog used by remote log followers.
 
     Returns:
         A tuple containing the log message and an exit code based on success or
@@ -1645,22 +1647,23 @@ def stream_logs_by_id(
     # (not yet at EOF) is worth monitoring this is the case for
     # kubectl exec -i with stdin=subprocess.PIPE.
     check_stdin_eof = False
-    try:
-        readable, _, _ = select.select([sys.stdin], [], [], 0)
-        if readable:
-            # stdin is immediately readable check if it's already EOF
-            data = os.read(sys.stdin.fileno(), 1)
-            if data:
-                # Got actual data (unexpected but harmless); stdin is live
+    if watch_disconnect:
+        try:
+            readable, _, _ = select.select([sys.stdin], [], [], 0)
+            if readable:
+                # stdin is immediately readable check if it's already EOF
+                data = os.read(sys.stdin.fileno(), 1)
+                if data:
+                    # Got actual data (unexpected but harmless); stdin is live
+                    check_stdin_eof = True
+                # else: EOF at startup, don't monitor
+            else:
+                # stdin is not immediately readable it's a live pipe/TTY
+                # waiting for input, meaning we have a real connection
                 check_stdin_eof = True
-            # else: EOF at startup, don't monitor
-        else:
-            # stdin is not immediately readable it's a live pipe/TTY
-            # waiting for input, meaning we have a real connection
-            check_stdin_eof = True
-    except (ValueError, OSError):
-        # stdin is already closed or invalid — not useful for monitoring
-        pass
+        except (ValueError, OSError):
+            # stdin is already closed or invalid — not useful for monitoring
+            pass
 
     def _orphan_watchdog() -> None:
         """Background thread that monitors for connection drop."""
@@ -1692,8 +1695,9 @@ def stream_logs_by_id(
                 os.kill(os.getpid(), signal.SIGTERM)
                 return
 
-    watchdog = threading.Thread(target=_orphan_watchdog, daemon=True)
-    watchdog.start()
+    if watch_disconnect:
+        watchdog = threading.Thread(target=_orphan_watchdog, daemon=True)
+        watchdog.start()
 
     def should_keep_logging(status: managed_job_state.ManagedJobStatus) -> bool:
         # If we see CANCELLING, just exit - we could miss some job logs but the

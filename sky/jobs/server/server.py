@@ -175,7 +175,14 @@ async def logs(
         # disconnect to cancel the running routine.
         kill_request_on_disconnect = True
 
-    return stream_utils.stream_response_for_long_request(
+    bounded_snapshot = (managed_jobs_utils.is_consolidation_mode() and
+                        not jobs_logs_body.follow and
+                        not jobs_logs_body.controller and
+                        jobs_logs_body.tail is not None and
+                        jobs_logs_body.tail > 0)
+    response_factory = (stream_utils.stream_response if bounded_snapshot else
+                        stream_utils.stream_response_for_long_request)
+    return response_factory(
         request_id=request_task.request_id,
         logs_path=request_task.log_path,
         background_tasks=background_tasks,

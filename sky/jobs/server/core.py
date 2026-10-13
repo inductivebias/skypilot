@@ -341,6 +341,20 @@ class _DefaultManagedJobRunner:
         tail_offset: Optional[int] = None,
         task: Optional[Union[str, int]],
     ) -> int:
+        if (isinstance(handle, backends.LocalResourcesHandle) and
+                job_id is not None and not follow and not controller and
+                tail is not None and tail > 0):
+            status = managed_job_state.get_status(job_id)
+            if status is not None and status.is_terminal():
+                message, returncode = managed_job_utils.stream_logs_by_id(
+                    job_id,
+                    follow=False,
+                    tail=tail,
+                    tail_offset=tail_offset,
+                    task=task,
+                    watch_disconnect=False)
+                print(message, flush=True)
+                return returncode
         return backend.tail_managed_job_logs(handle,
                                              job_id=job_id,
                                              job_name=job_name,
