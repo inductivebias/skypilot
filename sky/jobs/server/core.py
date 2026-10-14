@@ -341,6 +341,30 @@ class _DefaultManagedJobRunner:
         tail_offset: Optional[int] = None,
         task: Optional[Union[str, int]],
     ) -> int:
+        if (isinstance(handle, backends.LocalResourcesHandle) and
+                job_id is not None and not follow and not controller and
+                tail is not None and tail > 0):
+            status = managed_job_state.get_status(job_id)
+            task_info = managed_job_state.get_all_task_ids_names_statuses_logs(
+                job_id)
+            selected_tasks = [
+                info for info in task_info
+                if task is None or info[0] == task or info[1] == task
+            ]
+            local_logs_ready = (bool(selected_tasks) and all(
+                info[3] is not None for info in selected_tasks))
+            if (status is not None and status.is_terminal() and
+                    local_logs_ready):
+                # Avoid Python startup and SkyPilot imports for ready snapshots.
+                message, returncode = managed_job_utils.stream_logs_by_id(
+                    job_id,
+                    follow=False,
+                    tail=tail,
+                    tail_offset=tail_offset,
+                    task=task,
+                    watch_disconnect=False)
+                print(message, flush=True)
+                return returncode
         return backend.tail_managed_job_logs(handle,
                                              job_id=job_id,
                                              job_name=job_name,

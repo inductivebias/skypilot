@@ -970,6 +970,26 @@ class TestControllerProcessAlive:
                 False)
 
 
+def test_stream_logs_by_id_without_disconnect_watchdog_skips_process_monitor(
+        monkeypatch):
+    monkeypatch.setattr(
+        jobs_utils.select, 'select',
+        lambda *_args, **_kwargs: pytest.fail('stdin monitoring started'))
+    monkeypatch.setattr(
+        jobs_utils.threading, 'Thread',
+        lambda *_args, **_kwargs: pytest.fail('watchdog thread started'))
+    monkeypatch.setattr(jobs_utils.managed_job_state, 'get_num_tasks',
+                        lambda _job_id: 0)
+
+    message, returncode = jobs_utils.stream_logs_by_id(42,
+                                                       follow=False,
+                                                       tail=1,
+                                                       watch_disconnect=False)
+
+    assert message == 'Job 42 not found.'
+    assert returncode == exceptions.JobExitCode.NOT_FOUND
+
+
 class TestStreamLogsByIdTaskFiltering:
     """Tests for task filtering logic in stream_logs_by_id.
 
