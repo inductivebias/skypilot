@@ -57,13 +57,20 @@ def test_default_runner_terminal_bounded_snapshot_reads_in_process(
     handle = object.__new__(backends.LocalResourcesHandle)
     backend = mock.MagicMock(spec=backends.CloudVmRayBackend)
 
-    with mock.patch.object(jobs_core.managed_job_state,
-                           'get_status',
-                           return_value=managed_job_state.ManagedJobStatus.
-                           SUCCEEDED), mock.patch.object(
-                               jobs_core.managed_job_utils,
-                               'stream_logs_by_id',
-                               return_value=('last line', 0)) as mock_stream:
+    with mock.patch.object(
+            jobs_core.managed_job_state,
+            'get_status',
+            return_value=managed_job_state.ManagedJobStatus.SUCCEEDED
+    ), mock.patch.object(jobs_core.managed_job_state,
+                         'get_all_task_ids_names_statuses_logs',
+                         return_value=[
+                             (0, 'train',
+                              managed_job_state.ManagedJobStatus.SUCCEEDED,
+                              '/tmp/run.log', None)
+                         ]), mock.patch.object(jobs_core.managed_job_utils,
+                                               'stream_logs_by_id',
+                                               return_value=('last line',
+                                                             0)) as mock_stream:
         returncode = runner.tail_managed_job_logs(handle=handle,
                                                   backend=backend,
                                                   job_id=42,
@@ -83,6 +90,38 @@ def test_default_runner_terminal_bounded_snapshot_reads_in_process(
                                         task='train',
                                         watch_disconnect=False)
     backend.tail_managed_job_logs.assert_not_called()
+
+
+def test_default_runner_terminal_snapshot_waits_for_local_log():
+    runner = jobs_core._DefaultManagedJobRunner()
+    handle = object.__new__(backends.LocalResourcesHandle)
+    backend = mock.MagicMock(spec=backends.CloudVmRayBackend)
+    backend.tail_managed_job_logs.return_value = 0
+
+    with mock.patch.object(
+            jobs_core.managed_job_state,
+            'get_status',
+            return_value=managed_job_state.ManagedJobStatus.SUCCEEDED
+    ), mock.patch.object(
+            jobs_core.managed_job_state,
+            'get_all_task_ids_names_statuses_logs',
+            return_value=[
+                (0, 'train', managed_job_state.ManagedJobStatus.SUCCEEDED, None,
+                 None)
+            ]), mock.patch.object(jobs_core.managed_job_utils,
+                                  'stream_logs_by_id') as mock_stream:
+        returncode = runner.tail_managed_job_logs(handle=handle,
+                                                  backend=backend,
+                                                  job_id=42,
+                                                  job_name=None,
+                                                  follow=False,
+                                                  controller=False,
+                                                  tail=1,
+                                                  task=None)
+
+    assert returncode == 0
+    mock_stream.assert_not_called()
+    backend.tail_managed_job_logs.assert_called_once()
 
 
 @pytest.mark.parametrize(('local', 'follow', 'controller', 'tail', 'status'), [
@@ -105,8 +144,13 @@ def test_default_runner_non_snapshot_paths_keep_backend(
     with mock.patch.object(jobs_core.managed_job_state,
                            'get_status',
                            return_value=status), mock.patch.object(
-                               jobs_core.managed_job_utils,
-                               'stream_logs_by_id') as mock_stream:
+                               jobs_core.managed_job_state,
+                               'get_all_task_ids_names_statuses_logs',
+                               return_value=[
+                                   (0, '', status, '/tmp/run.log', None)
+                               ]), mock.patch.object(
+                                   jobs_core.managed_job_utils,
+                                   'stream_logs_by_id') as mock_stream:
         returncode = runner.tail_managed_job_logs(handle=handle,
                                                   backend=backend,
                                                   job_id=42,
