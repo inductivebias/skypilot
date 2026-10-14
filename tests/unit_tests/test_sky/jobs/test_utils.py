@@ -142,6 +142,13 @@ class TestUpdateFields:
         assert 'task_name' in updated_fields
         assert 'current_cluster_name' in updated_fields
 
+    def test_adds_persisted_cluster_name_when_handle_required(self):
+        fields = ['job_id', 'cluster_name_on_cloud']
+        updated_fields, cluster_handle_required = jobs_utils._update_fields(
+            fields)
+        assert cluster_handle_required is True
+        assert 'cluster_name_on_cloud' in updated_fields
+
     def test_does_not_modify_original_list(self):
         """Test that the original fields list is not modified."""
         fields = ['job_id']
@@ -398,6 +405,7 @@ class TestGetManagedJobQueue:
                 region='us-east-1',
                 zone='us-east-1a',
                 resources='1x[Spot]A100:8',
+                cluster_name_on_cloud='managed-job-1-abcd1234',
             )
         ]
         self._patch_managed_job_state(monkeypatch, jobs)
@@ -412,6 +420,47 @@ class TestGetManagedJobQueue:
         assert job['infra'] == 'AWS (us-east-1a)'
         assert job['cluster_resources'] == '1x[Spot]A100:8'
         assert job['cluster_resources_full'] == '1x[Spot]A100:8'
+        assert job['cluster_name_on_cloud'] == 'managed-job-1-abcd1234'
+
+    def test_finished_legacy_job_reconstructs_cluster_name_on_cloud(
+            self, monkeypatch):
+        jobs = [
+            self._make_test_job(
+                76,
+                status=managed_job_state.ManagedJobStatus.SUCCEEDED,
+                task_name='pr2413-multi-gpu-3e13b325f6-r2',
+                cloud='Kubernetes',
+                region='cks-dev-rno2a',
+                user_hash='2efc4401',
+                cluster_name_on_cloud=None,
+            )
+        ]
+        self._patch_managed_job_state(monkeypatch, jobs)
+        self._patch_global_user_state(monkeypatch)
+
+        result = jobs_utils.get_managed_job_queue()
+
+        assert result['jobs'][0]['cluster_name_on_cloud'] == (
+            'pr2413-multi-gpu-3e13b-74-76-2efc4401')
+
+    def test_finished_job_without_valid_user_hash_does_not_guess_cluster_name(
+            self, monkeypatch):
+        jobs = [
+            self._make_test_job(
+                1,
+                status=managed_job_state.ManagedJobStatus.SUCCEEDED,
+                task_name='legacy-job',
+                cloud='Kubernetes',
+                user_hash=None,
+                cluster_name_on_cloud=None,
+            )
+        ]
+        self._patch_managed_job_state(monkeypatch, jobs)
+        self._patch_global_user_state(monkeypatch)
+
+        result = jobs_utils.get_managed_job_queue()
+
+        assert result['jobs'][0]['cluster_name_on_cloud'] is None
 
     def test_finished_job_without_cached_infra_shows_dash(self, monkeypatch):
         """Legacy finished jobs without persisted infra still show '-'."""
