@@ -355,6 +355,7 @@ class _DefaultManagedJobRunner:
                 info[3] is not None for info in selected_tasks))
             if (status is not None and status.is_terminal() and
                     local_logs_ready):
+                # Read ready terminal snapshots in-process; fall back otherwise.
                 message, returncode = managed_job_utils.stream_logs_by_id(
                     job_id,
                     follow=False,

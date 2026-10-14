@@ -180,6 +180,7 @@ async def logs(
                         not jobs_logs_body.controller and
                         jobs_logs_body.tail is not None and
                         jobs_logs_body.tail > 0)
+    # Poll bounded consolidation requests at 100 ms; other streams keep 1 s.
     response_factory = (stream_utils.stream_response if bounded_snapshot else
                         stream_utils.stream_response_for_long_request)
     return response_factory(
