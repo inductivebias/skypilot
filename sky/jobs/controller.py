@@ -411,8 +411,11 @@ class JobController:
                 1. Any of the underlying failover exceptions is due to resources
                 unavailability.
                 2. The cluster is preempted or failed before the job is
-                submitted.
+                    submitted.
                 3. Any unexpected error happens during the `sky.launch`.
+            exceptions.ManagedJobControllerError: This will be raised after
+                the launch path repeats an unexpected controller or
+                task-dispatch failure.
         Other exceptions may be raised depending on the backend.
         """
         _add_k8s_annotations(task, self._job_id)
@@ -1887,6 +1890,13 @@ class JobController:
             # managed job may be able to launch next time.
             await self._update_failed_task_state(
                 task_id, managed_job_state.ManagedJobStatus.FAILED_NO_RESOURCE,
+                failure_reason)
+        except exceptions.ManagedJobControllerError as e:
+            logger.error(f'Managed-job controller failed for task {task_id}')
+            failure_reason = common_utils.format_exception(e, use_bracket=True)
+            logger.error(failure_reason)
+            await self._update_failed_task_state(
+                task_id, managed_job_state.ManagedJobStatus.FAILED_CONTROLLER,
                 failure_reason)
         except exceptions.ClusterSetUpError as e:
             # Raised by the launch path for a non-retryable setup failure, e.g.
