@@ -8,12 +8,39 @@ from unittest.mock import patch
 
 import pytest
 
+from sky import clouds
 from sky import resources
 from sky import task
 from sky.backends import cloud_vm_ray_backend
 from sky.backends.cloud_vm_ray_backend import CloudVmRayResourceHandle
 from sky.backends.cloud_vm_ray_backend import SSHTunnelInfo
 from sky.utils import status_lib
+
+
+@pytest.mark.parametrize(
+    ('cloud', 'expected_upload'),
+    [(clouds.Kubernetes(), True), (MagicMock(), False)],
+)
+def test_exec_code_on_head_uploads_short_driver_for_kubernetes(
+        cloud, expected_upload):
+    backend = object.__new__(cloud_vm_ray_backend.CloudVmRayBackend)
+    backend.log_dir = '~/sky_logs/1-test'
+    backend._dump_final_script = False
+    backend.run_on_head = MagicMock(return_value=(0, '', ''))
+
+    runner = MagicMock()
+    handle = MagicMock()
+    handle.cluster_name = 'test-cluster'
+    handle.is_grpc_enabled_with_flag = False
+    handle.launched_resources.cloud = cloud
+    handle.get_command_runners.return_value = [runner]
+
+    with patch.object(cloud_vm_ray_backend.backend_utils,
+                      'is_command_length_over_limit',
+                      return_value=False):
+        backend._exec_code_on_head(handle, 'print("short driver")', job_id=1)
+
+    assert runner.rsync_driver.called is expected_upload
 
 
 class TestCloudVmRayBackendTaskRedaction:

@@ -249,6 +249,12 @@ class ManagedJobReachedMaxRetriesError(Exception):
     pass
 
 
+class ManagedJobControllerError(Exception):
+    """Raised after bounded unexpected managed-job launch failures."""
+
+    pass
+
+
 class ManagedJobStatusError(Exception):
     """Raised when a managed job task status update is invalid.
 

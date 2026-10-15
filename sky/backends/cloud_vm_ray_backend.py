@@ -4230,7 +4230,9 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                 use_legacy = True
 
         if use_legacy:
-            if backend_utils.is_command_length_over_limit(job_submit_cmd):
+            if (isinstance(handle.launched_resources.cloud,
+                           clouds.Kubernetes) or
+                    backend_utils.is_command_length_over_limit(job_submit_cmd)):
                 _dump_code_to_file(codegen)
                 job_submit_cmd = f'{mkdir_code} && {code}'
 

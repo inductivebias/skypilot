@@ -10,7 +10,7 @@ import logging
 import os
 import traceback
 import typing
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple
 
 from sky import backends
 from sky import dag as dag_lib
@@ -47,6 +47,14 @@ logger = sky_logging.init_logger(__name__)
 # Waiting time for job from INIT/PENDING to RUNNING
 # 10 * JOB_STARTED_STATUS_CHECK_GAP_SECONDS = 10 * 5 = 50 seconds
 MAX_JOB_CHECKING_RETRY = 10
+_JOB_START_DEADLINE_SECONDS = (
+    MAX_JOB_CHECKING_RETRY *
+    managed_job_utils.JOB_STARTED_STATUS_CHECK_GAP_SECONDS)
+
+# Resource-unavailable failures may honor retry-until-up indefinitely, but
+# repeating an unexpected controller/transport failure cannot create capacity.
+# Allow one clean-cluster retry, then fail the managed job with the real reason.
+MAX_UNEXPECTED_LAUNCH_FAILURES = 2
 
 # Minutes to job cluster autodown. This should be significantly larger than
 # managed_job_utils.JOB_STATUS_CHECK_GAP_SECONDS, to avoid tearing down the
@@ -364,12 +372,13 @@ class StrategyExecutor:
                         'remaining job process interferes with recovery.')
             await asyncio.to_thread(self._cleanup_cluster)
 
-    async def _wait_until_job_starts_on_cluster(self) -> Optional[float]:
+    async def _wait_until_job_starts_on_cluster(
+            self) -> Tuple[Optional[float], bool]:
         """Wait for MAX_JOB_CHECKING_RETRY times until job starts on the cluster
 
         Returns:
-            The timestamp of when the job is submitted, or None if failed to
-            submit.
+            The timestamp of when the job is submitted and whether a missing
+            timestamp was caused by a preempted/unavailable cluster.
         """
         assert self.cluster_name is not None
         status = None
@@ -399,7 +408,7 @@ class StrategyExecutor:
                             'is submitted.')
                 # TODO(zhwu): we should recover the preemption with the
                 # recovery strategy instead of the current while loop.
-                break
+                return None, True
 
             try:
                 status, transient_error_reason = (
@@ -433,7 +442,7 @@ class StrategyExecutor:
                         managed_job_runtime.get_job_submitted_at, handle,
                         self.cluster_name)
                     if runtime_submitted_at is not None:
-                        return runtime_submitted_at
+                        return runtime_submitted_at, False
                 try:
                     job_submitted_at = await asyncio.to_thread(
                         managed_job_utils.get_job_timestamp,
@@ -441,7 +450,7 @@ class StrategyExecutor:
                         self.cluster_name,
                         self.job_id_on_pool_cluster,
                         get_end_time=False)
-                    return job_submitted_at
+                    return job_submitted_at, False
                 except Exception as e:  # pylint: disable=broad-except
                     # If we failed to get the job timestamp, we will retry
                     # job checking loop.
@@ -451,7 +460,7 @@ class StrategyExecutor:
             # Wait for the job to be started
             await asyncio.sleep(
                 managed_job_utils.JOB_STARTED_STATUS_CHECK_GAP_SECONDS)
-        return None
+        return None, False
 
     def _cleanup_cluster(self) -> None:
         if self.cluster_name is None:
@@ -580,6 +589,10 @@ class StrategyExecutor:
                 unavailability.
                 2. The cluster is preempted before the job is submitted.
                 3. Any unexpected error happens during the `sky.launch`.
+            exceptions.ManagedJobControllerError: This will be raised after
+                two consecutive unexpected controller or task-dispatch
+                failures. Resource-unavailable retries do not consume this
+                budget.
         Other exceptions may be raised depending on the backend.
         """
         # On recovery, re-read the persisted DAG so an out-of-band priority
@@ -589,9 +602,11 @@ class StrategyExecutor:
             self._refresh_priority_from_persisted_dag()
         # TODO(zhwu): handle the failure during `preparing sky runtime`.
         retry_cnt = 0
+        unexpected_launch_failures = 0
         backoff = common_utils.Backoff(self.RETRY_INIT_GAP_SECONDS)
         while True:
             retry_cnt += 1
+            unexpected_failure_reason: Optional[str] = None
             try:
                 async with scheduler.scheduled_launch(
                         self.job_id,
@@ -729,6 +744,7 @@ class StrategyExecutor:
                                 reasons=[e])
                         return None
                     except exceptions.ResourcesUnavailableError as e:
+                        unexpected_launch_failures = 0
                         # This is raised when the launch fails due to prechecks
                         # or after failing over through all the candidates.
                         # Please refer to the docstring of `sky.launch` for more
@@ -776,6 +792,8 @@ class StrategyExecutor:
                                     str(e)) from e
                         logger.info('Failed to launch a cluster with error: '
                                     f'{common_utils.format_exception(e)})')
+                        unexpected_failure_reason = (
+                            common_utils.format_exception(e))
                         with ux_utils.enable_traceback():
                             logger.info(
                                 f'  Traceback: {traceback.format_exc()}')
@@ -829,7 +847,7 @@ class StrategyExecutor:
                             else:
                                 logger.debug('Not populating instance links '
                                              'since the cluster name is None')
-                        job_submitted_at = await (
+                        job_submitted_at, cluster_unavailable = await (
                             self._wait_until_job_starts_on_cluster())
                         if job_submitted_at is not None:
                             return job_submitted_at
@@ -842,10 +860,33 @@ class StrategyExecutor:
                             'launched cluster, due to unexpected submission '
                             'errors or the cluster being preempted during '
                             'job submission.')
+                        if not cluster_unavailable:
+                            unexpected_failure_reason = (
+                                'cluster runtime was healthy but the worker '
+                                'job did not start within '
+                                f'{_JOB_START_DEADLINE_SECONDS} '
+                                'seconds')
+                        else:
+                            unexpected_launch_failures = 0
 
                     # If we get here, the launch did not succeed. Tear down the
                     # cluster and retry.
                     await asyncio.to_thread(self._cleanup_cluster)
+                    if unexpected_failure_reason is not None:
+                        unexpected_launch_failures += 1
+                        if (unexpected_launch_failures >=
+                                MAX_UNEXPECTED_LAUNCH_FAILURES):
+                            message = (
+                                'Managed-job launch failed after '
+                                f'{unexpected_launch_failures} unexpected '
+                                'controller/dispatch failures; last failure: '
+                                f'{unexpected_failure_reason}')
+                            logger.error(message)
+                            if raise_on_failure:
+                                with ux_utils.print_exception_no_traceback():
+                                    raise exceptions.ManagedJobControllerError(
+                                        message)
+                            return None
                     if max_retry is not None and retry_cnt >= max_retry:
                         # Retry forever if max_retry is None.
                         if raise_on_failure:
