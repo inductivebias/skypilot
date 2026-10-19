@@ -79,6 +79,23 @@ export async function getEnabledCloudsList() {
   }
 }
 
+export async function getDirectVMInventory() {
+  const response = await apiClient.get('/direct_vm_inventory');
+  if (!response.ok) {
+    const error = await getErrorMessageFromResponse(response);
+    throw new Error(
+      `Direct VM inventory failed with status ${response.status}: ${error}`
+    );
+  }
+  const inventory = await response.json();
+  return {
+    configured: inventory?.configured === true,
+    observed_at: inventory?.observed_at || null,
+    instances: Array.isArray(inventory?.instances) ? inventory.instances : [],
+    errors: Array.isArray(inventory?.errors) ? inventory.errors : [],
+  };
+}
+
 export async function getCloudInfrastructure(forceRefresh = false) {
   const { getClusters } = await import('@/data/connectors/clusters');
   const { getManagedJobs } = await import('@/data/connectors/jobs');
