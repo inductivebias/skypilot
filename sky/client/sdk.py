@@ -2697,6 +2697,16 @@ def api_info() -> responses.APIHealthResponse:
 
 @usage_lib.entrypoint
 @annotations.client_api
+def direct_vm_inventory() -> Dict[str, Any]:
+    """Gets direct VMs visible to the configured API server."""
+    response = server_common.make_authenticated_request('GET',
+                                                        '/direct_vm_inventory')
+    server_common.handle_request_error(response)
+    return response.json()
+
+
+@usage_lib.entrypoint
+@annotations.client_api
 def api_start(
     *,
     deploy: bool = False,
