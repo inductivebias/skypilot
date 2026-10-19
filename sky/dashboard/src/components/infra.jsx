@@ -133,6 +133,18 @@ export function getNodeJobInfrastructureOptions(selectedContext) {
   };
 }
 
+export function sortInfrastructureSections(sections) {
+  return [...sections].sort((a, b) => {
+    if (Boolean(a.tertiary) !== Boolean(b.tertiary)) {
+      return a.tertiary ? 1 : -1;
+    }
+    if (a.hasActivity !== b.hasActivity) {
+      return a.hasActivity ? -1 : 1;
+    }
+    return a.priority - b.priority;
+  });
+}
+
 const TERMINAL_JOB_STATUSES = new Set([
   'SUCCEEDED',
   'CANCELLED',
@@ -4284,7 +4296,8 @@ export function GPUs() {
           name: 'Direct VMs',
           render: renderDirectVMInfrastructure,
           hasActivity: directVMInventory.instances.length > 0,
-          priority: 1,
+          tertiary: true,
+          priority: 6,
         });
       }
 
@@ -4326,16 +4339,9 @@ export function GPUs() {
       sections.flatMap((section) => section.gpus || [])
     );
 
-    // Dynamic sorting: enabled/active sections move to front automatically
-    // This re-sorts every render as data becomes available
-    const sortedSections = sections.sort((a, b) => {
-      // Primary sort: active sections come first (this causes dynamic reordering)
-      if (a.hasActivity !== b.hasActivity) {
-        return a.hasActivity ? -1 : 1; // active sections move to front
-      }
-      // Secondary sort: maintain consistent order within same activity level
-      return a.priority - b.priority;
-    });
+    // Active scheduler infrastructure moves first. Tertiary inventory stays
+    // last even when it has activity and a scheduler section does not.
+    const sortedSections = sortInfrastructureSections(sections);
 
     return (
       <>
