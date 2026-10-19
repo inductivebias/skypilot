@@ -8,6 +8,7 @@ import {
   InfrastructureSection,
   NodeJobHistory,
   paginateNodeJobRows,
+  sortInfrastructureSections,
 } from '@/components/infra';
 import { getInfraContextHref } from '@/utils/infraUtils';
 
@@ -45,6 +46,20 @@ describe('getNodeJobInfrastructureOptions', () => {
       requireNodeNames: true,
     });
   });
+});
+
+it('keeps tertiary infrastructure after inactive SSH node pools', () => {
+  const sections = [
+    { name: 'Direct VMs', hasActivity: true, tertiary: true, priority: 6 },
+    { name: 'Kubernetes', hasActivity: true, priority: 2 },
+    { name: 'SSH Node Pool', hasActivity: false, priority: 5 },
+  ];
+
+  expect(sortInfrastructureSections(sections).map(({ name }) => name)).toEqual([
+    'Kubernetes',
+    'SSH Node Pool',
+    'Direct VMs',
+  ]);
 });
 
 describe('aggregateGPUsForContexts', () => {
