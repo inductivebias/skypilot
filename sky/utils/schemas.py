@@ -2703,6 +2703,21 @@ def get_config_schema():
                     },
                 },
             },
+            'direct_vm_inventory': {
+                'type': 'object',
+                'required': [],
+                'additionalProperties': False,
+                'properties': {
+                    'gcp_projects': {
+                        'type': 'array',
+                        'uniqueItems': True,
+                        'items': {
+                            'type': 'string',
+                            'minLength': 1,
+                        },
+                    },
+                },
+            },
         },
     }
 

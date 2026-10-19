@@ -34,6 +34,7 @@ import {
   getWorkspaceContexts,
   getContextGPUData,
   getCloudInfrastructure,
+  getDirectVMInventory,
   getEnabledCloudsList,
   getContextJobs,
   getContextClusters,
@@ -130,6 +131,18 @@ export function getNodeJobInfrastructureOptions(selectedContext) {
     fields: JOB_NODE_FIELDS,
     allUsers: true,
   };
+}
+
+export function sortInfrastructureSections(sections) {
+  return [...sections].sort((a, b) => {
+    if (Boolean(a.tertiary) !== Boolean(b.tertiary)) {
+      return a.tertiary ? 1 : -1;
+    }
+    if (a.hasActivity !== b.hasActivity) {
+      return a.hasActivity ? -1 : 1;
+    }
+    return a.priority - b.priority;
+  });
 }
 
 const TERMINAL_JOB_STATUSES = new Set([
@@ -2693,6 +2706,137 @@ function InfrastructureHint() {
   );
 }
 
+const STOPPED_DIRECT_VM_STATUSES = new Set([
+  'STOPPED',
+  'SUSPENDED',
+  'TERMINATED',
+]);
+
+export function DirectVMInfrastructure({ inventory, isLoading }) {
+  const [showStopped, setShowStopped] = useState(false);
+  const instances = inventory?.instances || [];
+  const visibleInstances = showStopped
+    ? instances
+    : instances.filter(
+        (instance) => !STOPPED_DIRECT_VM_STATUSES.has(instance.status)
+      );
+  const gpuNodes = visibleInstances.filter(
+    (instance) => (instance.gpu_count || 0) > 0
+  ).length;
+  const gpuCount = visibleInstances.reduce(
+    (total, instance) => total + (instance.gpu_count || 0),
+    0
+  );
+  const cpuNodes = visibleInstances.length - gpuNodes;
+
+  return (
+    <div className="rounded-lg border bg-card text-card-foreground shadow-sm mb-6">
+      <div className="p-5">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center">
+            <h3 className="text-lg font-semibold">Direct VMs</h3>
+            <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
+              outside scheduler
+            </span>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              checked={showStopped}
+              onChange={(event) => setShowStopped(event.target.checked)}
+            />
+            Show stopped
+          </label>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Provider-owned VMs created outside SkyPilot. They are inventory only
+          and are not included in schedulable capacity.
+        </p>
+        {inventory?.errors?.map((error) => (
+          <div
+            key={error.project}
+            className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          >
+            {error.project}: {error.message || 'inventory unavailable'}
+          </div>
+        ))}
+        {isLoading && instances.length === 0 ? (
+          <div className="flex items-center py-2 text-sm text-gray-500">
+            <CircularProgress size={16} className="mr-2" />
+            Loading...
+          </div>
+        ) : visibleInstances.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            {showStopped
+              ? 'No direct VMs found.'
+              : 'No running or transitional direct VMs found.'}
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2 mb-3 text-xs">
+              <span className="px-2 py-1 rounded bg-gray-100 text-gray-700">
+                {cpuNodes} CPU nodes
+              </span>
+              <span className="px-2 py-1 rounded bg-gray-100 text-gray-700">
+                {gpuNodes} GPU nodes
+              </span>
+              <span className="px-2 py-1 rounded bg-gray-100 text-gray-700">
+                {gpuCount} physical GPUs
+              </span>
+            </div>
+            <div className="overflow-x-auto rounded-md border shadow-sm bg-card">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {[
+                      'Name',
+                      'Owner',
+                      'State',
+                      'Resources',
+                      'Machine',
+                      'Zone',
+                      'Project',
+                    ].map((heading) => (
+                      <th
+                        key={heading}
+                        className="p-3 text-left font-medium text-gray-600"
+                      >
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-card divide-y divide-gray-200">
+                  {visibleInstances.map((instance) => (
+                    <tr
+                      key={`${instance.cloud}:${instance.project}:${instance.name}`}
+                      className="hover:bg-muted/50"
+                    >
+                      <td className="p-3 font-medium text-gray-700">
+                        {instance.name || '—'}
+                      </td>
+                      <td className="p-3">{instance.owner || '—'}</td>
+                      <td className="p-3">{instance.status || 'UNKNOWN'}</td>
+                      <td className="p-3">
+                        {(instance.gpu_count || 0) > 0
+                          ? `${instance.gpu_count}× ${instance.gpu_type || 'GPU'}`
+                          : 'CPU'}
+                      </td>
+                      <td className="p-3">{instance.machine_type || '—'}</td>
+                      <td className="p-3">{instance.zone || '—'}</td>
+                      <td className="p-3">{instance.project || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function GPUs() {
   // Plugin-contributed extra rows + status data.
   //
@@ -2751,6 +2895,7 @@ export function GPUs() {
   const isMobile = useMobile();
   const [kubeDataLoaded, setKubeDataLoaded] = useState(false);
   const [cloudDataLoaded, setCloudDataLoaded] = useState(false);
+  const [directVMLoading, setDirectVMLoading] = useState(true);
   const router = useRouter();
 
   const [allKubeContextNames, setAllKubeContextNames] = useState([]);
@@ -2762,6 +2907,11 @@ export function GPUs() {
   const [perClusterSlurmGPUs, setPerClusterSlurmGPUs] = useState([]);
   const [perNodeSlurmGPUs, setPerNodeSlurmGPUs] = useState([]);
   const [cloudInfraData, setCloudInfraData] = useState([]);
+  const [directVMInventory, setDirectVMInventory] = useState({
+    configured: false,
+    instances: [],
+    errors: [],
+  });
   const [totalClouds, setTotalClouds] = useState(0);
   // Separate cluster/job counts for Cloud panel (for progressive loading)
   const [cloudClusterCounts, setCloudClusterCounts] = useState({});
@@ -2911,6 +3061,7 @@ export function GPUs() {
       if (showLoadingIndicators) {
         setKubeLoading(true);
         setCloudLoading(true);
+        setDirectVMLoading(true);
         setSshLoading(true);
         setSlurmLoading(true);
         setSshAndKubeJobsDataLoading(true);
@@ -2944,6 +3095,7 @@ export function GPUs() {
           fetchKubernetesData(forceRefresh, showLoadingIndicators),
           fetchSSHNodePools(forceRefresh),
           fetchCloudData(forceRefresh),
+          fetchDirectVMData(forceRefresh),
           fetchManagedJobsData(),
           fetchClusterStatsData(),
           fetchSlurmData(),
@@ -2974,6 +3126,12 @@ export function GPUs() {
         setCloudClusterCounts({});
         setCloudJobCounts({});
         setCloudDataLoaded(true);
+        setDirectVMInventory({
+          configured: true,
+          instances: [],
+          errors: [{ project: 'GCP', message: 'Inventory unavailable' }],
+        });
+        setDirectVMLoading(false);
         setSshNodePools({});
         setSshLoading(false);
         setSlurmLoading(false);
@@ -2994,6 +3152,7 @@ export function GPUs() {
         if (showLoadingIndicators) {
           setKubeLoading(false);
           setCloudLoading(false);
+          setDirectVMLoading(false);
           setSshLoading(false);
           setSlurmLoading(false);
           setSshAndKubeJobsDataLoading(false);
@@ -3281,6 +3440,29 @@ export function GPUs() {
     }
   };
 
+  const fetchDirectVMData = async (forceRefresh) => {
+    try {
+      const inventory = forceRefresh
+        ? await getDirectVMInventory()
+        : await dashboardCache.get(getDirectVMInventory);
+      setDirectVMInventory(inventory);
+    } catch (error) {
+      console.error('Error in fetchDirectVMData:', error);
+      setDirectVMInventory({
+        configured: true,
+        instances: [],
+        errors: [
+          {
+            project: 'GCP',
+            message: error.message || 'Inventory unavailable',
+          },
+        ],
+      });
+    } finally {
+      setDirectVMLoading(false);
+    }
+  };
+
   // SSH Node Pool data fetching
   const fetchSSHNodePools = async (forceRefresh) => {
     try {
@@ -3399,6 +3581,7 @@ export function GPUs() {
       // Reset loading states for fresh load next time
       setKubeDataLoaded(false);
       setCloudDataLoaded(false);
+      setDirectVMLoading(false);
       setSshLoading(false);
       setSlurmLoading(false);
       setSlurmDataLoaded(false);
@@ -3430,6 +3613,7 @@ export function GPUs() {
     // (workspaces, expand) variant in one call.
     dashboardCache.invalidateFunction(getEnabledCloudsBatch);
     dashboardCache.invalidate(getCloudInfrastructure, [false]); // Keep for backwards compatibility
+    dashboardCache.invalidate(getDirectVMInventory);
     dashboardCache.invalidate(getSSHNodePools);
     dashboardCache.invalidate(getSlurmInfrastructure);
 
@@ -3666,6 +3850,7 @@ export function GPUs() {
       !slurmDataLoaded ||
       kubeLoading ||
       cloudLoading ||
+      directVMLoading ||
       slurmLoading ||
       pluginInfraLoading
     ) {
@@ -3677,8 +3862,9 @@ export function GPUs() {
     const noSSH = sshContexts.length === 0;
     const noKubernetes = kubeContexts.length === 0;
     const noSlurm = slurmClusters.length === 0;
+    const noDirectVMs = !directVMInventory.configured;
 
-    return noCloud && noSSH && noKubernetes && noSlurm;
+    return noCloud && noSSH && noKubernetes && noSlurm && noDirectVMs;
   })();
 
   // Check URL on component mount to set initial context
@@ -3954,6 +4140,13 @@ export function GPUs() {
     );
   };
 
+  const renderDirectVMInfrastructure = () => (
+    <DirectVMInfrastructure
+      inventory={directVMInventory}
+      isLoading={directVMLoading}
+    />
+  );
+
   const renderSSHNodePoolInfrastructure = () => {
     return (
       <InfrastructureSection
@@ -4095,8 +4288,18 @@ export function GPUs() {
         gpus: kubeGPUs,
         render: renderKubernetesInfrastructure,
         hasActivity: kubeHasActivity,
-        priority: 1, // Kubernetes gets priority 1 within same activity level
+        priority: 2,
       });
+
+      if (directVMInventory.configured || directVMLoading) {
+        sections.push({
+          name: 'Direct VMs',
+          render: renderDirectVMInfrastructure,
+          hasActivity: directVMInventory.instances.length > 0,
+          tertiary: true,
+          priority: 6,
+        });
+      }
 
       // Add Slurm section (always show)
       const slurmHasActivity = slurmClusters.length > 0;
@@ -4105,7 +4308,7 @@ export function GPUs() {
         gpus: allSlurmGPUs,
         render: renderSlurmInfrastructure,
         hasActivity: slurmHasActivity,
-        priority: 2, // Slurm gets priority 2 within same activity level
+        priority: 3,
       });
 
       // Add Cloud section (always show)
@@ -4116,7 +4319,7 @@ export function GPUs() {
         name: 'Cloud',
         render: renderCloudInfrastructure,
         hasActivity: cloudHasActivity,
-        priority: 3, // Cloud gets priority 3 within same activity level
+        priority: 4,
       });
 
       // Add SSH section (always show)
@@ -4126,7 +4329,7 @@ export function GPUs() {
         gpus: sshGPUs,
         render: renderSSHNodePoolInfrastructure,
         hasActivity: sshHasActivity,
-        priority: 4, // SSH gets priority 4 within same activity level
+        priority: 5,
       });
     }
 
@@ -4136,16 +4339,9 @@ export function GPUs() {
       sections.flatMap((section) => section.gpus || [])
     );
 
-    // Dynamic sorting: enabled/active sections move to front automatically
-    // This re-sorts every render as data becomes available
-    const sortedSections = sections.sort((a, b) => {
-      // Primary sort: active sections come first (this causes dynamic reordering)
-      if (a.hasActivity !== b.hasActivity) {
-        return a.hasActivity ? -1 : 1; // active sections move to front
-      }
-      // Secondary sort: maintain consistent order within same activity level
-      return a.priority - b.priority;
-    });
+    // Active scheduler infrastructure moves first. Tertiary inventory stays
+    // last even when it has activity and a scheduler section does not.
+    const sortedSections = sortInfrastructureSections(sections);
 
     return (
       <>
@@ -4180,6 +4376,7 @@ export function GPUs() {
   const isAnyLoading =
     kubeLoading ||
     cloudLoading ||
+    directVMLoading ||
     slurmLoading ||
     sshAndKubeJobsDataLoading ||
     clusterDataLoading ||
