@@ -67,6 +67,7 @@ from sky.server import config as server_config
 from sky.server import constants as server_constants
 from sky.server import csp_utils
 from sky.server import daemons
+from sky.server import direct_vm_inventory as direct_vm_inventory_lib
 from sky.server import metrics
 from sky.server import middleware_utils
 from sky.server import plugins
@@ -2697,6 +2698,17 @@ async def dashboard_config() -> Dict[str, Any]:
             if isinstance(label, str) and isinstance(regex, str):
                 sanitized.append({'label': label, 'regex': regex})
     return {'external_links': sanitized}
+
+
+@app.get('/direct_vm_inventory')
+async def direct_vm_inventory() -> Dict[str, Any]:
+    """Lists direct VMs from administrator-configured GCP projects."""
+    projects = skypilot_config.get_nested(
+        ('dashboard', 'direct_vm_inventory', 'gcp_projects'), [])
+    if not isinstance(projects, list):
+        projects = []
+    return await anyio.to_thread.run_sync(
+        direct_vm_inventory_lib.get_direct_vm_inventory, projects)
 
 
 @app.get('/api/plugins')
