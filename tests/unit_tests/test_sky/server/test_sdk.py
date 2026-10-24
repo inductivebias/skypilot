@@ -133,7 +133,7 @@ def test_api_info_with_cookie_file(set_api_cookie_jar):
             assert mock_make_request.call_args[0] == ('GET', '/api/health')
 
 
-def test_kubernetes_node_info_sends_exact_custom_resource():
+def test_kubernetes_node_info_sends_exact_snapshot_options():
     selector = {
         'group': 'compute.coreweave.com',
         'version': 'v1alpha1',
@@ -150,13 +150,21 @@ def test_kubernetes_node_info_sends_exact_custom_resource():
          mock.patch('sky.server.common.make_authenticated_request',
                     return_value=response) as make_request:
         request_id = client_sdk.kubernetes_node_info(context='cks-use06a',
-                                                     custom_resource=selector)
+                                                     custom_resource=selector,
+                                                     pod_label_keys=[
+                                                         'scheduler/run-id',
+                                                         'scheduler/attempt',
+                                                     ])
 
     assert str(request_id) == 'request-1'
     assert make_request.call_args.args == ('POST', '/kubernetes_node_info')
     request_body = make_request.call_args.kwargs['json']
     assert request_body['context'] == 'cks-use06a'
     assert request_body['custom_resource'] == selector
+    assert request_body['pod_label_keys'] == [
+        'scheduler/run-id',
+        'scheduler/attempt',
+    ]
 
 
 def test_kubernetes_node_info_rejects_custom_resource_for_old_server():
@@ -173,6 +181,16 @@ def test_kubernetes_node_info_rejects_custom_resource_for_old_server():
                     'plural': 'nodepools',
                     'name': 'flourish-h100-spot',
                 })
+
+
+def test_kubernetes_node_info_rejects_pod_allocations_for_old_server():
+    with mock.patch('sky.server.common.check_server_healthy_or_start_fn'), \
+         mock.patch('sky.server.versions.get_remote_api_version',
+                    return_value=(server_constants.
+                                  MIN_KUBERNETES_POD_ALLOCATIONS_API_VERSION - 1)):
+        with pytest.raises(exceptions.APINotSupportedError,
+                           match='API_VERSION'):
+            client_sdk.kubernetes_node_info(pod_label_keys=['scheduler/run-id'])
 
 
 def test_api_login(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
