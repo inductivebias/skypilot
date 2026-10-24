@@ -2162,11 +2162,12 @@ class V1Pod:
                        ]))
 
 
-@_retry_on_error(resource_type='pod')
-def get_allocated_resources_by_node(
+def _get_allocated_resources_by_node(
     *,
-    context: Optional[str] = None,
-) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]]]:
+    context: Optional[str],
+    pod_label_keys: Optional[List[str]],
+) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]],
+           Optional[List[models.KubernetesPodAllocation]]]:
     """Gets allocated GPU, CPU, and memory by each node by fetching pods in
     all namespaces in kubernetes cluster indicated by context.
 
@@ -2174,9 +2175,12 @@ def get_allocated_resources_by_node(
     API call for better performance.
 
     Returns:
-        Tuple of (allocated_gpu_qty_by_node, allocated_cpu_memory_by_node):
+        Tuple of (allocated_gpu_qty_by_node, allocated_cpu_memory_by_node,
+        pod_allocations):
         - allocated_gpu_qty_by_node: Dict mapping node name to allocated GPU count
         - allocated_cpu_memory_by_node: Dict mapping node name to (allocated_cpu, allocated_memory_gb) tuple
+        - pod_allocations: Scheduled accelerator requests with only the selected
+          labels, or None when label projection was not requested.
     """
     if context is None:
         context = get_current_kube_config_context_name()
@@ -2197,6 +2201,8 @@ def get_allocated_resources_by_node(
         allocated_qty_by_node: Dict[str, int] = collections.defaultdict(int)
         allocated_cpu_memory_by_node: Dict[str, Tuple[
             float, float]] = collections.defaultdict(lambda: (0.0, 0.0))
+        pod_allocations: Optional[List[models.KubernetesPodAllocation]] = (
+            [] if pod_label_keys is not None else None)
         for item_dict in ijson.items(response,
                                      'items.item',
                                      buf_size=IJSON_BUFFER_SIZE):
@@ -2230,15 +2236,66 @@ def get_allocated_resources_by_node(
 
             if pod_allocated_qty > 0:
                 allocated_qty_by_node[pod.spec.node_name] += pod_allocated_qty
+                if pod_allocations is not None:
+                    pod_allocations.append(
+                        models.KubernetesPodAllocation(
+                            node_name=pod.spec.node_name,
+                            labels={
+                                key: value
+                                for key in pod_label_keys or []
+                                if isinstance((
+                                    value := pod.metadata.labels.get(key)), str)
+                            },
+                            accelerators=pod_allocated_qty,
+                        ))
             if pod_allocated_cpu > 0 or pod_allocated_memory_gb > 0:
                 current_cpu, current_memory = allocated_cpu_memory_by_node[
                     pod.spec.node_name]
                 allocated_cpu_memory_by_node[pod.spec.node_name] = (
                     current_cpu + pod_allocated_cpu,
                     current_memory + pod_allocated_memory_gb)
-        return allocated_qty_by_node, allocated_cpu_memory_by_node
+        if pod_allocations is not None:
+            pod_allocations.sort(key=lambda allocation: (
+                allocation.node_name,
+                tuple(sorted(allocation.labels.items())),
+                allocation.accelerators,
+            ))
+        return (allocated_qty_by_node, allocated_cpu_memory_by_node,
+                pod_allocations)
     finally:
         response.release_conn()
+
+
+@_retry_on_error(resource_type='pod')
+def get_allocated_resources_by_node(
+    *,
+    context: Optional[str] = None,
+) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]]]:
+    """Get allocated GPU, CPU, and memory by node."""
+    allocated_gpus, allocated_cpu_memory, _ = (_get_allocated_resources_by_node(
+        context=context, pod_label_keys=None))
+    return allocated_gpus, allocated_cpu_memory
+
+
+@_retry_on_error(resource_type='pod')
+def get_allocated_resources_by_node_with_pod_labels(
+    *,
+    context: Optional[str] = None,
+    pod_label_keys: List[str],
+) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]],
+           List[models.KubernetesPodAllocation]]:
+    """Get allocated resources plus selected labels for accelerator pods."""
+    if (not pod_label_keys or len(pod_label_keys) > 16 or
+            len(set(pod_label_keys)) != len(pod_label_keys) or
+            any(not isinstance(key, str) or not key for key in pod_label_keys)):
+        raise ValueError(
+            'pod_label_keys must contain 1-16 unique non-empty strings')
+    allocated_gpus, allocated_cpu_memory, pod_allocations = (
+        _get_allocated_resources_by_node(context=context,
+                                         pod_label_keys=pod_label_keys))
+    if pod_allocations is None:
+        raise RuntimeError("pod allocation collection unexpectedly disabled")
+    return allocated_gpus, allocated_cpu_memory, pod_allocations
 
 
 @_retry_on_error(resource_type='pod')
@@ -4510,8 +4567,9 @@ def _get_kubernetes_autoscaling_capacity(
 
 def get_kubernetes_node_info(
     context: Optional[str] = None,
-    custom_resource: Optional[Dict[str,
-                                   str]] = None) -> models.KubernetesNodesInfo:
+    custom_resource: Optional[Dict[str, str]] = None,
+    pod_label_keys: Optional[List[str]] = None,
+) -> models.KubernetesNodesInfo:
     """Gets the resource information for all the nodes in the cluster.
 
     This function returns a model with node info map as a nested field. This
@@ -4532,6 +4590,8 @@ def get_kubernetes_node_info(
         custom_resource: Optional exact cluster-scoped custom resource to read
             with the node inventory. It must contain only ``group``,
             ``version``, ``plural``, and ``name``.
+        pod_label_keys: Optional Kubernetes label keys to project for scheduled
+            pods with accelerator requests. Other labels are not returned.
 
     Returns:
         KubernetesNodesInfo: A model that contains the node info map and other
@@ -4539,7 +4599,7 @@ def get_kubernetes_node_info(
     """
     # Try external node info source first (e.g., node-info-service cache).
     # This allows plugins to provide cached node info for faster queries.
-    if (custom_resource is None and
+    if (custom_resource is None and pod_label_keys is None and
             plugin_extensions.NodeInfoSource.is_registered()):
         # Resolve context before calling the provider so it can be cached
         resolved_context = (context if context is not None else
@@ -4602,14 +4662,21 @@ def get_kubernetes_node_info(
     # Get the allocated resources (GPU, CPU, memory) by each node in a single call
     allocated_qty_by_node: Dict[str, int] = collections.defaultdict(int)
     allocated_cpu_memory_by_node: Dict[str, Tuple[float, float]] = {}
+    pod_allocations: Optional[List[models.KubernetesPodAllocation]] = None
     error_on_get_allocated_resources = False
     # Get resource allocation. For GPU allocation, only call if there are GPU nodes
     # (same as master branch). For CPU/memory, we always need it for all nodes.
     if has_accelerator_nodes:
         # When there are GPU nodes, get both GPU and CPU/memory in one call
         try:
-            allocated_qty_by_node, allocated_cpu_memory_by_node = get_allocated_resources_by_node(
-                context=context)
+            if pod_label_keys is None:
+                allocated_qty_by_node, allocated_cpu_memory_by_node = (
+                    get_allocated_resources_by_node(context=context))
+            else:
+                (allocated_qty_by_node, allocated_cpu_memory_by_node,
+                 pod_allocations) = (
+                     get_allocated_resources_by_node_with_pod_labels(
+                         context=context, pod_label_keys=pod_label_keys))
         except kubernetes.api_exception() as e:
             if e.status == 403:
                 error_on_get_allocated_resources = True
@@ -4620,8 +4687,13 @@ def get_kubernetes_node_info(
         # When there are no GPU nodes, we still need CPU/memory allocation
         # This is an extra API call compared to master branch
         try:
-            _, allocated_cpu_memory_by_node = get_allocated_resources_by_node(
-                context=context)
+            if pod_label_keys is None:
+                _, allocated_cpu_memory_by_node = (
+                    get_allocated_resources_by_node(context=context))
+            else:
+                (_, allocated_cpu_memory_by_node, pod_allocations) = (
+                    get_allocated_resources_by_node_with_pod_labels(
+                        context=context, pod_label_keys=pod_label_keys))
         except kubernetes.api_exception() as e:
             if e.status == 403:
                 error_on_get_allocated_resources = True
@@ -4762,6 +4834,7 @@ def get_kubernetes_node_info(
         custom_resource=_get_custom_resource(context, custom_resource),
         autoscaling_capacity=_get_kubernetes_autoscaling_capacity(
             context, nodes),
+        pod_allocations=pod_allocations,
     )
 
 

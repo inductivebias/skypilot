@@ -4,6 +4,8 @@
 
 import collections
 import copy
+import io
+import json
 import os
 import re
 import tempfile
@@ -21,6 +23,16 @@ from sky import exceptions
 from sky import models
 from sky.catalog import kubernetes_catalog
 from sky.provision.kubernetes import utils
+
+
+class _PodListResponse(io.BytesIO):
+
+    def __init__(self, payload: dict):
+        super().__init__(json.dumps(payload).encode())
+        self.released = False
+
+    def release_conn(self) -> None:
+        self.released = True
 
 
 # Test for exception on permanent errors like 401 (Unauthorized)
@@ -59,6 +71,84 @@ def test_get_custom_resource_reads_exact_cluster_scoped_object():
 
     assert result == expected
     api.get_cluster_custom_object.assert_called_once_with(**selector)
+
+
+def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
+    response = _PodListResponse({
+        'items': [{
+            'metadata': {
+                'name': 'run-1-pod',
+                'namespace': 'default',
+                'labels': {
+                    'scheduler/run-id': 'run-1',
+                    'scheduler/attempt': '2',
+                    'secret-label': 'not-returned',
+                },
+            },
+            'status': {
+                'phase': 'Running'
+            },
+            'spec': {
+                'nodeName': 'node-1',
+                'containers': [{
+                    'resources': {
+                        'requests': {
+                            'nvidia.com/gpu': '8'
+                        }
+                    }
+                }],
+            },
+        }, {
+            'metadata': {
+                'name': 'pending-pod',
+                'namespace': 'default',
+                'labels': {
+                    'scheduler/run-id': 'pending-run'
+                },
+            },
+            'status': {
+                'phase': 'Pending'
+            },
+            'spec': {
+                'containers': [{
+                    'resources': {
+                        'requests': {
+                            'nvidia.com/gpu': '8'
+                        }
+                    }
+                }],
+            },
+        }]
+    })
+    core_api = mock.MagicMock()
+    core_api.list_pod_for_all_namespaces.return_value = response
+
+    with mock.patch('sky.provision.kubernetes.utils.kubernetes.core_api',
+                    return_value=core_api), \
+         mock.patch(
+             'sky.provision.kubernetes.utils.get_node_accelerator_count',
+             side_effect=lambda _context, resources: int(
+                 resources.get('nvidia.com/gpu', 0))):
+        allocated, _, pod_allocations = (
+            utils.get_allocated_resources_by_node_with_pod_labels(
+                context='test-context',
+                pod_label_keys=[
+                    'scheduler/run-id',
+                    'scheduler/attempt',
+                ]))
+
+    assert allocated == {'node-1': 8}
+    assert pod_allocations == [
+        models.KubernetesPodAllocation(
+            node_name='node-1',
+            labels={
+                'scheduler/run-id': 'run-1',
+                'scheduler/attempt': '2',
+            },
+            accelerators=8,
+        )
+    ]
+    assert response.released
 
 
 @pytest.mark.parametrize('selector', [

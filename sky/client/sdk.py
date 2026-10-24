@@ -2308,6 +2308,7 @@ def realtime_kubernetes_gpu_availability(
 def kubernetes_node_info(
     context: Optional[str] = None,
     custom_resource: Optional[Dict[str, str]] = None,
+    pod_label_keys: Optional[List[str]] = None,
 ) -> server_common.RequestId['models.KubernetesNodesInfo']:
     """Gets the resource information for all the nodes in the cluster.
 
@@ -2323,6 +2324,8 @@ def kubernetes_node_info(
         custom_resource: Optional exact cluster-scoped custom resource to read
             in the same server-side snapshot. The dictionary must contain
             ``group``, ``version``, ``plural``, and ``name``.
+        pod_label_keys: Optional Kubernetes label keys to project for scheduled
+            pods with accelerator requests. Other pod labels are not returned.
 
     Returns:
         The request ID of the Kubernetes node info request.
@@ -2341,8 +2344,20 @@ def kubernetes_node_info(
                     'server with API_VERSION >= '
                     f'{server_constants.MIN_KUBERNETES_CUSTOM_RESOURCE_API_VERSION}.'
                 )
+    if pod_label_keys is not None:
+        remote_api_version = versions.get_remote_api_version()
+        if (remote_api_version is None or remote_api_version <
+                server_constants.MIN_KUBERNETES_POD_ALLOCATIONS_API_VERSION):
+            with ux_utils.print_exception_no_traceback():
+                raise exceptions.APINotSupportedError(
+                    'Kubernetes pod allocations require an API server with '
+                    'API_VERSION >= '
+                    f'{server_constants.MIN_KUBERNETES_POD_ALLOCATIONS_API_VERSION}.'
+                )
     body = payloads.KubernetesNodeInfoRequestBody(
-        context=context, custom_resource=custom_resource)
+        context=context,
+        custom_resource=custom_resource,
+        pod_label_keys=pod_label_keys)
     response = server_common.make_authenticated_request(
         'POST',
         '/kubernetes_node_info',
