@@ -4454,6 +4454,17 @@ def _nonnegative_int(value: Any, field: str) -> int:
     return value
 
 
+def _optional_nonnegative_int(value: Any, field: str) -> Optional[int]:
+    """Parse an optional non-negative Kubernetes integer field."""
+    if value is None:
+        return None
+    try:
+        return _nonnegative_int(value, field)
+    except ValueError:
+        logger.debug('Ignoring malformed optional Kubernetes field %s', field)
+        return None
+
+
 def _accelerators_per_node(resource: Dict[str, Any]) -> int:
     resource_annotations = resource.get('metadata', {}).get('annotations', {})
     return _nonnegative_int(
@@ -4497,15 +4508,21 @@ def _get_cks_autoscaling_capacity(
         if spec.get('autoscaling') is not True:
             continue
         name = node_pool.get('metadata', {}).get('name')
+        status = node_pool.get('status', {})
         accelerator_type = spec.get('nodeLabels',
                                     {}).get(SkyPilotLabelFormatter.LABEL_KEY)
         try:
             accelerators_per_node = _accelerators_per_node(node_pool)
-            current_nodes = _nonnegative_int(
-                node_pool.get('status', {}).get('currentNodes'),
-                'status.currentNodes')
+            current_nodes = _nonnegative_int(status.get('currentNodes'),
+                                             'status.currentNodes')
             min_nodes = _nonnegative_int(spec.get('minNodes'), 'spec.minNodes')
             max_nodes = _nonnegative_int(spec.get('maxNodes'), 'spec.maxNodes')
+            target_nodes = _optional_nonnegative_int(status.get('targetNodes'),
+                                                     'status.targetNodes')
+            queued_nodes = _optional_nonnegative_int(status.get('queuedNodes'),
+                                                     'status.queuedNodes')
+            in_progress_nodes = _optional_nonnegative_int(
+                status.get('inProgress'), 'status.inProgress')
         except ValueError:
             logger.debug('Ignoring malformed CoreWeave NodePool %s', name or
                          '<unnamed>')
@@ -4514,6 +4531,18 @@ def _get_cks_autoscaling_capacity(
                 not isinstance(accelerator_type, str) or not accelerator_type or
                 accelerators_per_node <= 0 or max_nodes < min_nodes):
             continue
+        conditions = status.get('conditions', [])
+        if not isinstance(conditions, list):
+            conditions = []
+        capacity_condition = next((condition for condition in conditions
+                                   if isinstance(condition, dict) and
+                                   condition.get('type') == 'Capacity'), None)
+        if capacity_condition is not None:
+            capacity_condition = {
+                key: str(capacity_condition[key])
+                for key in ('status', 'reason', 'message', 'lastTransitionTime')
+                if capacity_condition.get(key) is not None
+            }
         capacities.append(
             models.KubernetesAutoscalingCapacity(
                 node_pool=name,
@@ -4524,6 +4553,10 @@ def _get_cks_autoscaling_capacity(
                 current_nodes=current_nodes,
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
+                target_nodes=target_nodes,
+                queued_nodes=queued_nodes,
+                in_progress_nodes=in_progress_nodes,
+                capacity_condition=capacity_condition,
             ))
     return capacities
 

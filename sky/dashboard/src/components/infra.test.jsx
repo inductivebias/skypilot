@@ -275,6 +275,57 @@ it('renders one unified per-context table without a Requestable column', () => {
   expect(screen.queryByText('Autoscaling headroom')).not.toBeInTheDocument();
 });
 
+it('shows Kubernetes jobs, pending pods, and provider queue demand', () => {
+  const context = 'cks-prod-rno2a-spot';
+  const gpu = {
+    context,
+    gpu_name: 'H100',
+    gpu_total: 0,
+    gpu_free: 0,
+    gpu_not_ready: 0,
+    gpu_min: 0,
+    gpu_max: 64,
+  };
+  render(
+    <InfrastructureSection
+      title="Kubernetes"
+      isLoading={false}
+      isDataLoaded={true}
+      contexts={[context]}
+      gpus={[gpu]}
+      groupedPerContextGPUs={{ [context]: [gpu] }}
+      groupedPerNodeGPUs={{ [context]: [] }}
+      handleContextClick={() => {}}
+      jobsData={{ [`kubernetes/${context}`]: { jobs: 1 } }}
+      demandByContext={{
+        [context]: {
+          pendingPods: 1,
+          queuedNodes: 1,
+          inProgressNodes: 0,
+          capacityIssues: [
+            {
+              nodePool: 'h100ib-rno2a-spot',
+              reason: 'CWInsufficientCapacity',
+              message: '1 pending node awaits spot capacity.',
+              lastTransitionTime: '2026-10-25T03:00:05Z',
+            },
+          ],
+        },
+      }}
+      isJobsDataLoading={false}
+      loadedContexts={new Set([context])}
+      isInitialLoad={false}
+    />
+  );
+
+  expect(screen.getByText('Demand')).toBeInTheDocument();
+  expect(screen.getByText('1 job · 1 pending pod')).toBeInTheDocument();
+  expect(screen.getByText('1 queued · 0 provisioning')).toBeInTheDocument();
+  expect(screen.getAllByText('Waiting for provider capacity')).toHaveLength(2);
+  expect(screen.getByText('Pending pods')).toBeInTheDocument();
+  expect(screen.getByText('Queued nodes')).toBeInTheDocument();
+});
+
 describe('node job history', () => {
   const context = 'cks-use06a';
   const nodes = [
