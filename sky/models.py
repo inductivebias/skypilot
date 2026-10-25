@@ -138,6 +138,24 @@ class KubernetesPodAllocation:
 
 
 @dataclasses.dataclass
+class KubernetesPodObservation:
+    """One accelerator pod's scheduling identity and condition evidence."""
+    name: str
+    namespace: str
+    uid: str
+    phase: Optional[str]
+    node_name: Optional[str]
+    labels: Dict[str, str]
+    accelerators: int
+    created_at: Optional[str]
+    conditions: List[Dict[str, str]]
+    containers: List[Dict[str, Any]]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
 class KubernetesNodesInfo:
     """Dataclass to store Kubernetes node info map."""
     # The nodes in the cluster, keyed by node name.
@@ -152,6 +170,9 @@ class KubernetesNodesInfo:
     # Scheduled accelerator requests. None means they were not requested or
     # could not be observed; an empty list is an authoritative zero.
     pod_allocations: Optional[List[KubernetesPodAllocation]] = None
+    # Accelerator pods, including pods not assigned to a node yet. Conditions
+    # retain Kubernetes' exact reason, message, and transition time.
+    pod_observations: Optional[List[KubernetesPodObservation]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -168,6 +189,9 @@ class KubernetesNodesInfo:
             'pod_allocations':
                 (None if self.pod_allocations is None else
                  [allocation.to_dict() for allocation in self.pod_allocations]),
+            'pod_observations': (None if self.pod_observations is None else [
+                observation.to_dict() for observation in self.pod_observations
+            ]),
         }
 
     @classmethod
@@ -187,6 +211,11 @@ class KubernetesNodesInfo:
                 KubernetesPodAllocation(**allocation)
                 for allocation in data['pod_allocations']
             ]),
+            pod_observations=(None
+                              if data.get('pod_observations') is None else [
+                                  KubernetesPodObservation(**observation)
+                                  for observation in data['pod_observations']
+                              ]),
         )
 
 

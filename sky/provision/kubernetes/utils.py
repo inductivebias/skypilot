@@ -2166,8 +2166,9 @@ def _get_allocated_resources_by_node(
     *,
     context: Optional[str],
     pod_label_keys: Optional[List[str]],
-) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]],
-           Optional[List[models.KubernetesPodAllocation]]]:
+) -> Tuple[Dict[str, int], Dict[str, Tuple[
+        float, float]], Optional[List[models.KubernetesPodAllocation]],
+           Optional[List[models.KubernetesPodObservation]]]:
     """Gets allocated GPU, CPU, and memory by each node by fetching pods in
     all namespaces in kubernetes cluster indicated by context.
 
@@ -2176,11 +2177,13 @@ def _get_allocated_resources_by_node(
 
     Returns:
         Tuple of (allocated_gpu_qty_by_node, allocated_cpu_memory_by_node,
-        pod_allocations):
+        pod_allocations, pod_observations):
         - allocated_gpu_qty_by_node: Dict mapping node name to allocated GPU count
         - allocated_cpu_memory_by_node: Dict mapping node name to (allocated_cpu, allocated_memory_gb) tuple
         - pod_allocations: Scheduled accelerator requests with only the selected
           labels, or None when label projection was not requested.
+        - pod_observations: Accelerator pods, including unscheduled pods, with
+          selected labels and exact Kubernetes condition evidence.
     """
     if context is None:
         context = get_current_kube_config_context_name()
@@ -2203,6 +2206,8 @@ def _get_allocated_resources_by_node(
             float, float]] = collections.defaultdict(lambda: (0.0, 0.0))
         pod_allocations: Optional[List[models.KubernetesPodAllocation]] = (
             [] if pod_label_keys is not None else None)
+        pod_observations: Optional[List[models.KubernetesPodObservation]] = (
+            [] if pod_label_keys is not None else None)
         for item_dict in ijson.items(response,
                                      'items.item',
                                      buf_size=IJSON_BUFFER_SIZE):
@@ -2212,9 +2217,6 @@ def _get_allocated_resources_by_node(
                     f'Excluding pod {pod.metadata.name} from resource count '
                     f'calculations on node {pod.spec.node_name}')
                 continue
-            if not pod.spec.node_name:
-                continue
-
             # Iterate over all the containers in the pod and sum the resources
             pod_allocated_qty = 0
             pod_allocated_cpu = 0.0
@@ -2234,18 +2236,99 @@ def _get_allocated_resources_by_node(
                         pod_allocated_memory_gb += parse_memory_resource(
                             requests['memory'], unit='G')
 
+            selected_labels = {
+                key: value
+                for key in pod_label_keys or []
+                if isinstance((value := pod.metadata.labels.get(key)), str)
+            }
+            if pod_allocated_qty > 0 and pod_observations is not None:
+                metadata = item_dict.get('metadata', {})
+                status = item_dict.get('status', {})
+                conditions = []
+                for condition in status.get('conditions', []):
+                    if not isinstance(condition, dict):
+                        continue
+                    evidence = {}
+                    for source, target in (
+                        ('type', 'type'),
+                        ('status', 'status'),
+                        ('reason', 'reason'),
+                        ('message', 'message'),
+                        ('lastTransitionTime', 'last_transition_time'),
+                    ):
+                        value = condition.get(source)
+                        if isinstance(value, str):
+                            evidence[target] = value
+                    if 'type' in evidence and 'status' in evidence:
+                        conditions.append(evidence)
+                conditions.sort(key=lambda condition: (
+                    condition['type'],
+                    condition['status'],
+                    condition.get('last_transition_time', ''),
+                ))
+                containers = []
+                for container in status.get('containerStatuses', []):
+                    if not isinstance(container, dict):
+                        continue
+                    container_evidence: Dict[str, Any] = {}
+                    name = container.get('name')
+                    if isinstance(name, str):
+                        container_evidence['name'] = name
+                    ready = container.get('ready')
+                    if isinstance(ready, bool):
+                        container_evidence['ready'] = ready
+                    restart_count = container.get('restartCount')
+                    if type(restart_count) is int:
+                        container_evidence['restart_count'] = restart_count
+                    state = container.get('state', {})
+                    if isinstance(state, dict):
+                        for state_name in ('waiting', 'running', 'terminated'):
+                            state_detail = state.get(state_name)
+                            if not isinstance(state_detail, dict):
+                                continue
+                            container_evidence['state'] = state_name
+                            for source, target in (
+                                ('reason', 'reason'),
+                                ('message', 'message'),
+                                ('startedAt', 'started_at'),
+                                ('finishedAt', 'finished_at'),
+                                ('exitCode', 'exit_code'),
+                            ):
+                                value = state_detail.get(source)
+                                if isinstance(value, str | int):
+                                    container_evidence[target] = value
+                            break
+                    if container_evidence:
+                        containers.append(container_evidence)
+                containers.sort(
+                    key=lambda container: str(container.get('name', '')))
+                pod_observations.append(
+                    models.KubernetesPodObservation(
+                        name=str(metadata.get('name') or ''),
+                        namespace=str(metadata.get('namespace') or ''),
+                        uid=str(metadata.get('uid') or ''),
+                        phase=pod.status.phase,
+                        node_name=pod.spec.node_name,
+                        labels=selected_labels,
+                        accelerators=pod_allocated_qty,
+                        created_at=(metadata.get('creationTimestamp')
+                                    if isinstance(
+                                        metadata.get('creationTimestamp'), str)
+                                    else None),
+                        conditions=conditions,
+                        containers=containers,
+                    ))
+
+            if not pod.spec.node_name:
+                continue
+
             if pod_allocated_qty > 0:
                 allocated_qty_by_node[pod.spec.node_name] += pod_allocated_qty
                 if pod_allocations is not None:
                     pod_allocations.append(
                         models.KubernetesPodAllocation(
                             node_name=pod.spec.node_name,
-                            labels={
-                                key: value
-                                for key in pod_label_keys or []
-                                if isinstance((
-                                    value := pod.metadata.labels.get(key)), str)
-                            },
+                            labels=selected_labels,
                             accelerators=pod_allocated_qty,
                         ))
             if pod_allocated_cpu > 0 or pod_allocated_memory_gb > 0:
@@ -2260,8 +2343,14 @@ def _get_allocated_resources_by_node(
                 tuple(sorted(allocation.labels.items())),
                 allocation.accelerators,
             ))
+        if pod_observations is not None:
+            pod_observations.sort(key=lambda observation: (
+                observation.namespace,
+                observation.name,
+                observation.uid,
+            ))
         return (allocated_qty_by_node, allocated_cpu_memory_by_node,
-                pod_allocations)
+                pod_allocations, pod_observations)
     finally:
         response.release_conn()
 
@@ -2272,8 +2361,8 @@ def get_allocated_resources_by_node(
     context: Optional[str] = None,
 ) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]]]:
     """Get allocated GPU, CPU, and memory by node."""
-    allocated_gpus, allocated_cpu_memory, _ = (_get_allocated_resources_by_node(
-        context=context, pod_label_keys=None))
+    allocated_gpus, allocated_cpu_memory, _, _ = (
+        _get_allocated_resources_by_node(context=context, pod_label_keys=None))
     return allocated_gpus, allocated_cpu_memory
 
 
@@ -2282,20 +2371,22 @@ def get_allocated_resources_by_node_with_pod_labels(
     *,
     context: Optional[str] = None,
     pod_label_keys: List[str],
-) -> Tuple[Dict[str, int], Dict[str, Tuple[float, float]],
-           List[models.KubernetesPodAllocation]]:
+) -> Tuple[Dict[str, int], Dict[str, Tuple[
+        float, float]], List[models.KubernetesPodAllocation],
+           List[models.KubernetesPodObservation]]:
     """Get allocated resources plus selected labels for accelerator pods."""
     if (not pod_label_keys or len(pod_label_keys) > 16 or
             len(set(pod_label_keys)) != len(pod_label_keys) or
             any(not isinstance(key, str) or not key for key in pod_label_keys)):
         raise ValueError(
             'pod_label_keys must contain 1-16 unique non-empty strings')
-    allocated_gpus, allocated_cpu_memory, pod_allocations = (
-        _get_allocated_resources_by_node(context=context,
-                                         pod_label_keys=pod_label_keys))
-    if pod_allocations is None:
-        raise RuntimeError("pod allocation collection unexpectedly disabled")
-    return allocated_gpus, allocated_cpu_memory, pod_allocations
+    (allocated_gpus, allocated_cpu_memory, pod_allocations,
+     pod_observations) = (_get_allocated_resources_by_node(
+         context=context, pod_label_keys=pod_label_keys))
+    if pod_allocations is None or pod_observations is None:
+        raise RuntimeError('pod evidence collection unexpectedly disabled')
+    return (allocated_gpus, allocated_cpu_memory, pod_allocations,
+            pod_observations)
 
 
 @_retry_on_error(resource_type='pod')
@@ -4590,8 +4681,9 @@ def get_kubernetes_node_info(
         custom_resource: Optional exact cluster-scoped custom resource to read
             with the node inventory. It must contain only ``group``,
             ``version``, ``plural``, and ``name``.
-        pod_label_keys: Optional Kubernetes label keys to project for scheduled
-            pods with accelerator requests. Other labels are not returned.
+        pod_label_keys: Optional Kubernetes label keys to project for pods with
+            accelerator requests. Pending-pod scheduling evidence is included;
+            other labels are not returned.
 
     Returns:
         KubernetesNodesInfo: A model that contains the node info map and other
@@ -4663,6 +4755,7 @@ def get_kubernetes_node_info(
     allocated_qty_by_node: Dict[str, int] = collections.defaultdict(int)
     allocated_cpu_memory_by_node: Dict[str, Tuple[float, float]] = {}
     pod_allocations: Optional[List[models.KubernetesPodAllocation]] = None
+    pod_observations: Optional[List[models.KubernetesPodObservation]] = None
     error_on_get_allocated_resources = False
     # Get resource allocation. For GPU allocation, only call if there are GPU nodes
     # (same as master branch). For CPU/memory, we always need it for all nodes.
@@ -4674,7 +4767,7 @@ def get_kubernetes_node_info(
                     get_allocated_resources_by_node(context=context))
             else:
                 (allocated_qty_by_node, allocated_cpu_memory_by_node,
-                 pod_allocations) = (
+                 pod_allocations, pod_observations) = (
                      get_allocated_resources_by_node_with_pod_labels(
                          context=context, pod_label_keys=pod_label_keys))
         except kubernetes.api_exception() as e:
@@ -4691,9 +4784,10 @@ def get_kubernetes_node_info(
                 _, allocated_cpu_memory_by_node = (
                     get_allocated_resources_by_node(context=context))
             else:
-                (_, allocated_cpu_memory_by_node, pod_allocations) = (
-                    get_allocated_resources_by_node_with_pod_labels(
-                        context=context, pod_label_keys=pod_label_keys))
+                (_, allocated_cpu_memory_by_node, pod_allocations,
+                 pod_observations) = (
+                     get_allocated_resources_by_node_with_pod_labels(
+                         context=context, pod_label_keys=pod_label_keys))
         except kubernetes.api_exception() as e:
             if e.status == 403:
                 error_on_get_allocated_resources = True
@@ -4835,6 +4929,7 @@ def get_kubernetes_node_info(
         autoscaling_capacity=_get_kubernetes_autoscaling_capacity(
             context, nodes),
         pod_allocations=pod_allocations,
+        pod_observations=pod_observations,
     )
 
 
