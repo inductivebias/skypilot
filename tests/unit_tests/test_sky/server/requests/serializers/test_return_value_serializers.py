@@ -216,6 +216,35 @@ class TestSerializeKubernetesNodeInfo:
     @mock.patch(
         'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
     )
+    def test_pod_allocations_require_api_version_60(self, mock_get_version):
+        data = {
+            'node_info_dict': {},
+            'hint': '',
+            'pod_allocations': [{
+                'node_name': 'node-1',
+                'labels': {
+                    'scheduler/run-id': 'run-1'
+                },
+                'accelerators': 8,
+            }],
+        }
+        mock_get_version.return_value = 59
+
+        old_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert 'pod_allocations' not in json.loads(old_result)
+        mock_get_version.return_value = 60
+
+        new_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert json.loads(
+            new_result)['pod_allocations'] == data['pod_allocations']
+
+    @mock.patch(
+        'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
+    )
     def test_remote_version_none_keeps_is_ready(self, mock_get_version):
         """Test that is_ready is kept when remote_api_version is None."""
         mock_get_version.return_value = None

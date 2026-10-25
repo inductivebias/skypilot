@@ -127,6 +127,17 @@ class KubernetesAutoscalingCapacity:
 
 
 @dataclasses.dataclass
+class KubernetesPodAllocation:
+    """One scheduled pod's accelerator request and selected labels."""
+    node_name: str
+    labels: Dict[str, str]
+    accelerators: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
 class KubernetesNodesInfo:
     """Dataclass to store Kubernetes node info map."""
     # The nodes in the cluster, keyed by node name.
@@ -138,6 +149,9 @@ class KubernetesNodesInfo:
     # Live bounds for autoscaled accelerator node pools, when the configured
     # provider exposes a queryable source of truth.
     autoscaling_capacity: Optional[List[KubernetesAutoscalingCapacity]] = None
+    # Scheduled accelerator requests. None means they were not requested or
+    # could not be observed; an empty list is an authoritative zero.
+    pod_allocations: Optional[List[KubernetesPodAllocation]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -151,6 +165,9 @@ class KubernetesNodesInfo:
                 capacity.to_dict()
                 for capacity in (self.autoscaling_capacity or [])
             ],
+            'pod_allocations':
+                (None if self.pod_allocations is None else
+                 [allocation.to_dict() for allocation in self.pod_allocations]),
         }
 
     @classmethod
@@ -166,6 +183,10 @@ class KubernetesNodesInfo:
                 KubernetesAutoscalingCapacity(**capacity)
                 for capacity in data.get('autoscaling_capacity', [])
             ],
+            pod_allocations=(None if data.get('pod_allocations') is None else [
+                KubernetesPodAllocation(**allocation)
+                for allocation in data['pod_allocations']
+            ]),
         )
 
 
