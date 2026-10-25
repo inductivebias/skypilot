@@ -2324,8 +2324,9 @@ def kubernetes_node_info(
         custom_resource: Optional exact cluster-scoped custom resource to read
             in the same server-side snapshot. The dictionary must contain
             ``group``, ``version``, ``plural``, and ``name``.
-        pod_label_keys: Optional Kubernetes label keys to project for scheduled
-            pods with accelerator requests. Other pod labels are not returned.
+        pod_label_keys: Optional Kubernetes label keys to project for pods with
+            accelerator requests. The response includes scheduling evidence
+            for Pending pods. Other pod labels are not returned.
 
     Returns:
         The request ID of the Kubernetes node info request.

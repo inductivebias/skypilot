@@ -73,12 +73,14 @@ def test_get_custom_resource_reads_exact_cluster_scoped_object():
     api.get_cluster_custom_object.assert_called_once_with(**selector)
 
 
-def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
+def test_get_allocated_resources_projects_scheduled_and_pending_pod_evidence():
     response = _PodListResponse({
         'items': [{
             'metadata': {
                 'name': 'run-1-pod',
                 'namespace': 'default',
+                'uid': 'run-1-pod-uid',
+                'creationTimestamp': '2026-10-25T03:00:00Z',
                 'labels': {
                     'scheduler/run-id': 'run-1',
                     'scheduler/attempt': '2',
@@ -86,7 +88,22 @@ def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
                 },
             },
             'status': {
-                'phase': 'Running'
+                'phase': 'Running',
+                'conditions': [{
+                    'type': 'PodScheduled',
+                    'status': 'True',
+                    'lastTransitionTime': '2026-10-25T03:00:05Z',
+                }],
+                'containerStatuses': [{
+                    'name': 'job',
+                    'ready': True,
+                    'restartCount': 0,
+                    'state': {
+                        'running': {
+                            'startedAt': '2026-10-25T03:00:08Z'
+                        }
+                    },
+                }],
             },
             'spec': {
                 'nodeName': 'node-1',
@@ -102,12 +119,32 @@ def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
             'metadata': {
                 'name': 'pending-pod',
                 'namespace': 'default',
+                'uid': 'pending-pod-uid',
+                'creationTimestamp': '2026-10-25T03:01:00Z',
                 'labels': {
                     'scheduler/run-id': 'pending-run'
                 },
             },
             'status': {
-                'phase': 'Pending'
+                'phase': 'Pending',
+                'conditions': [{
+                    'type': 'PodScheduled',
+                    'status': 'False',
+                    'reason': 'Unschedulable',
+                    'message': ('0/4 nodes are available: 4 Insufficient '
+                                'nvidia.com/gpu.'),
+                    'lastTransitionTime': '2026-10-25T03:01:01Z',
+                }],
+                'containerStatuses': [{
+                    'name': 'job',
+                    'ready': False,
+                    'restartCount': 0,
+                    'state': {
+                        'waiting': {
+                            'reason': 'ContainerCreating'
+                        }
+                    },
+                }],
             },
             'spec': {
                 'containers': [{
@@ -129,7 +166,7 @@ def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
              'sky.provision.kubernetes.utils.get_node_accelerator_count',
              side_effect=lambda _context, resources: int(
                  resources.get('nvidia.com/gpu', 0))):
-        allocated, _, pod_allocations = (
+        allocated, _, pod_allocations, pod_observations = (
             utils.get_allocated_resources_by_node_with_pod_labels(
                 context='test-context',
                 pod_label_keys=[
@@ -147,6 +184,58 @@ def test_get_allocated_resources_projects_selected_labels_for_scheduled_pods():
             },
             accelerators=8,
         )
+    ]
+    assert pod_observations == [
+        models.KubernetesPodObservation(
+            name='pending-pod',
+            namespace='default',
+            uid='pending-pod-uid',
+            phase='Pending',
+            node_name=None,
+            labels={'scheduler/run-id': 'pending-run'},
+            accelerators=8,
+            created_at='2026-10-25T03:01:00Z',
+            conditions=[{
+                'type': 'PodScheduled',
+                'status': 'False',
+                'reason': 'Unschedulable',
+                'message': ('0/4 nodes are available: 4 Insufficient '
+                            'nvidia.com/gpu.'),
+                'last_transition_time': '2026-10-25T03:01:01Z',
+            }],
+            containers=[{
+                'name': 'job',
+                'ready': False,
+                'restart_count': 0,
+                'state': 'waiting',
+                'reason': 'ContainerCreating',
+            }],
+        ),
+        models.KubernetesPodObservation(
+            name='run-1-pod',
+            namespace='default',
+            uid='run-1-pod-uid',
+            phase='Running',
+            node_name='node-1',
+            labels={
+                'scheduler/run-id': 'run-1',
+                'scheduler/attempt': '2',
+            },
+            accelerators=8,
+            created_at='2026-10-25T03:00:00Z',
+            conditions=[{
+                'type': 'PodScheduled',
+                'status': 'True',
+                'last_transition_time': '2026-10-25T03:00:05Z',
+            }],
+            containers=[{
+                'name': 'job',
+                'ready': True,
+                'restart_count': 0,
+                'state': 'running',
+                'started_at': '2026-10-25T03:00:08Z',
+            }],
+        ),
     ]
     assert response.released
 

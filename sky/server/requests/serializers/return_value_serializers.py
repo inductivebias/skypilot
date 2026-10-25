@@ -65,6 +65,9 @@ def serialize_kubernetes_node_info(return_value: Dict[str, Any]) -> str:
         if (remote_api_version <
                 server_constants.MIN_KUBERNETES_POD_ALLOCATIONS_API_VERSION):
             return_value.pop('pod_allocations', None)
+        if (remote_api_version <
+                server_constants.MIN_KUBERNETES_POD_OBSERVATIONS_API_VERSION):
+            return_value.pop('pod_observations', None)
         for node_info in return_value.get('node_info_dict', {}).values():
             if remote_api_version < 25:
                 # Remove is_ready field for old clients that don't recognize it

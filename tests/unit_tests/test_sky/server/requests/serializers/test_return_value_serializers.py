@@ -245,6 +245,52 @@ class TestSerializeKubernetesNodeInfo:
     @mock.patch(
         'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
     )
+    def test_pod_observations_require_api_version_61(self, mock_get_version):
+        data = {
+            'node_info_dict': {},
+            'hint': '',
+            'pod_observations': [{
+                'name': 'pending-pod',
+                'namespace': 'default',
+                'uid': 'pending-pod-uid',
+                'phase': 'Pending',
+                'node_name': None,
+                'labels': {
+                    'scheduler/run-id': 'run-1'
+                },
+                'accelerators': 8,
+                'created_at': '2026-10-25T03:00:00Z',
+                'conditions': [{
+                    'type': 'PodScheduled',
+                    'status': 'False',
+                    'reason': 'Unschedulable',
+                    'message': 'Insufficient nvidia.com/gpu',
+                }],
+                'containers': [{
+                    'name': 'job',
+                    'ready': False,
+                    'state': 'waiting',
+                    'reason': 'ContainerCreating',
+                }],
+            }],
+        }
+        mock_get_version.return_value = 60
+
+        old_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert 'pod_observations' not in json.loads(old_result)
+        mock_get_version.return_value = 61
+
+        new_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert json.loads(
+            new_result)['pod_observations'] == data['pod_observations']
+
+    @mock.patch(
+        'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
+    )
     def test_remote_version_none_keeps_is_ready(self, mock_get_version):
         """Test that is_ready is kept when remote_api_version is None."""
         mock_get_version.return_value = None
