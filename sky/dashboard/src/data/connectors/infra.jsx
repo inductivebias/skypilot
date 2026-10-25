@@ -431,7 +431,7 @@ export async function getWorkspaceContexts() {
 // Returns processed GPU data for one context that can be merged into state
 export async function getContextGPUData(context) {
   try {
-    const { nodeInfoDict, autoscalingCapacity } =
+    const { nodeInfoDict, autoscalingCapacity, podObservations } =
       await getKubernetesPerNodeGPUs(context);
 
     // Process node info into GPU summaries
@@ -534,6 +534,7 @@ export async function getContextGPUData(context) {
       context,
       perContextGPUs,
       perNodeGPUs: perNodeGPUs,
+      demand: summarizeKubernetesDemand(podObservations, autoscalingCapacity),
       error: null,
     };
   } catch (error) {
@@ -549,9 +550,71 @@ export async function getContextGPUData(context) {
       context,
       perContextGPUs: [],
       perNodeGPUs: [],
+      demand: null,
       error: errorMessage,
     };
   }
+}
+
+export function summarizeKubernetesDemand(
+  podObservations = [],
+  autoscalingCapacity = []
+) {
+  const acceleratorPods = podObservations.filter(
+    (pod) => Number.isInteger(pod?.accelerators) && pod.accelerators > 0
+  );
+  const pendingPods = acceleratorPods.filter((pod) => pod.phase === 'Pending');
+  const validCapacities = autoscalingCapacity.filter(
+    (capacity) => capacity && typeof capacity === 'object'
+  );
+  const sumIntegerField = (field) =>
+    validCapacities.reduce(
+      (total, capacity) =>
+        total +
+        (Number.isInteger(capacity[field]) && capacity[field] >= 0
+          ? capacity[field]
+          : 0),
+      0
+    );
+  const capacityIssues = validCapacities.flatMap((capacity) => {
+    const condition = capacity.capacity_condition;
+    const queuedNodes = Number.isInteger(capacity.queued_nodes)
+      ? capacity.queued_nodes
+      : 0;
+    if (!condition && queuedNodes === 0) {
+      return [];
+    }
+    if (
+      condition &&
+      queuedNodes === 0 &&
+      condition.status === 'True' &&
+      condition.reason === 'Sufficient'
+    ) {
+      return [];
+    }
+    return [
+      {
+        nodePool: capacity.node_pool,
+        reason: condition?.reason || 'ProviderQueue',
+        message: condition?.message || '',
+        lastTransitionTime: condition?.lastTransitionTime || null,
+      },
+    ];
+  });
+
+  return {
+    pendingPods: pendingPods.length,
+    pendingGpus: pendingPods.reduce(
+      (total, pod) => total + pod.accelerators,
+      0
+    ),
+    runningPods: acceleratorPods.filter((pod) => pod.phase === 'Running')
+      .length,
+    targetNodes: sumIntegerField('target_nodes'),
+    queuedNodes: sumIntegerField('queued_nodes'),
+    inProgressNodes: sumIntegerField('in_progress_nodes'),
+    capacityIssues,
+  };
 }
 
 // Helper function to get GPU data for specific contexts
@@ -798,6 +861,7 @@ async function getKubernetesPerNodeGPUs(context) {
     return {
       nodeInfoDict: nodeInfo['node_info_dict'] || {},
       autoscalingCapacity: nodeInfo['autoscaling_capacity'] || [],
+      podObservations: nodeInfo['pod_observations'] || [],
     };
   } catch (error) {
     console.warn(
