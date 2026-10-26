@@ -4495,6 +4495,26 @@ def _list_cluster_custom_objects(context: str, group: str, version: str,
     return [item for item in items if isinstance(item, dict)]
 
 
+def _autoscaling_pool_allowed_for_context(context: str,
+                                          labels: Dict[str, Any]) -> bool:
+    """Whether a pool's future nodes can match this context's node filter."""
+    config = get_allowed_nodes_config(context)
+    if config is None:
+        return True
+
+    label_selector = config.get('label_selector', {})
+    allowed_names = config.get('names', [])
+    allowed_ips = config.get('ips', [])
+    if not label_selector and not allowed_names and not allowed_ips:
+        return True
+
+    # Names and IPs can identify existing nodes, but cannot establish that
+    # future autoscaled nodes belong to this logical context. Pool template
+    # labels are the only durable attribution available before a node exists.
+    return any(
+        labels.get(key) == value for key, value in label_selector.items())
+
+
 def _get_cks_autoscaling_capacity(
         context: str) -> List[models.KubernetesAutoscalingCapacity]:
     """Read every autoscaled CoreWeave NodePool in one context."""
@@ -4509,8 +4529,8 @@ def _get_cks_autoscaling_capacity(
             continue
         name = node_pool.get('metadata', {}).get('name')
         status = node_pool.get('status', {})
-        accelerator_type = spec.get('nodeLabels',
-                                    {}).get(SkyPilotLabelFormatter.LABEL_KEY)
+        labels = spec.get('nodeLabels', {})
+        accelerator_type = labels.get(SkyPilotLabelFormatter.LABEL_KEY)
         try:
             accelerators_per_node = _accelerators_per_node(node_pool)
             current_nodes = _nonnegative_int(status.get('currentNodes'),
@@ -4530,6 +4550,8 @@ def _get_cks_autoscaling_capacity(
         if (not isinstance(name, str) or not name or
                 not isinstance(accelerator_type, str) or not accelerator_type or
                 accelerators_per_node <= 0 or max_nodes < min_nodes):
+            continue
+        if not _autoscaling_pool_allowed_for_context(context, labels):
             continue
         conditions = status.get('conditions', [])
         if not isinstance(conditions, list):
@@ -4591,6 +4613,9 @@ def _get_karpenter_autoscaling_capacity(
         if (not isinstance(name, str) or not name or
                 not isinstance(accelerator_type, str) or not accelerator_type or
                 accelerators_per_node <= 0):
+            continue
+        labels = {**labels, 'karpenter.sh/nodepool': name}
+        if not _autoscaling_pool_allowed_for_context(context, labels):
             continue
         capacities.append(
             models.KubernetesAutoscalingCapacity(
@@ -4660,6 +4685,12 @@ def _get_gke_autoscaling_capacity(
         name = node_pool.get('name')
         if not isinstance(name, str) or not name:
             continue
+        labels = {
+            **node_pool.get('config', {}).get('labels', {}),
+            'cloud.google.com/gke-nodepool': name,
+        }
+        if not _autoscaling_pool_allowed_for_context(context, labels):
+            continue
         capacities.append(
             models.KubernetesAutoscalingCapacity(
                 node_pool=name,
@@ -4677,7 +4708,7 @@ def _get_gke_autoscaling_capacity(
 def _get_kubernetes_autoscaling_capacity(
         context: Optional[str],
         nodes: List[Any]) -> List[models.KubernetesAutoscalingCapacity]:
-    """Discover autoscaling capacity without context or pool allowlists."""
+    """Discover autoscaling capacity eligible for one logical context."""
     if context is None:
         return []
     valid_gke_context, _, _, _ = (
