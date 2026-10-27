@@ -2715,8 +2715,8 @@ const STOPPED_DIRECT_VM_STATUSES = new Set([
 ]);
 
 const DIRECT_VM_TYPE_COLORS = {
-  cpu: ['bg-yellow-100', 'bg-yellow-200', 'bg-yellow-300', 'bg-amber-200'],
-  gpu: ['bg-orange-100', 'bg-orange-200', 'bg-orange-300', 'bg-amber-300'],
+  cpu: ['bg-yellow-100', 'bg-yellow-200', 'bg-yellow-300', 'bg-yellow-400'],
+  gpu: ['bg-orange-100', 'bg-orange-200', 'bg-orange-300', 'bg-orange-400'],
   stopped: ['bg-gray-200', 'bg-gray-300', 'bg-slate-200', 'bg-stone-300'],
 };
 
