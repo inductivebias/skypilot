@@ -241,20 +241,21 @@ it('renders direct VMs separately from schedulable capacity', () => {
     'aria-pressed',
     'false'
   );
-  expect(screen.getByRole('button', { name: '1 GPU nodes' })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
-  expect(screen.getByText('2 physical GPUs')).toBeInTheDocument();
+  expect(
+    screen.getByRole('button', {
+      name: '1 GPU nodes (2 physical GPUs)',
+    })
+  ).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByText('Show:')).toBeInTheDocument();
   expect(screen.getByText('GCP · us-central1-a')).toBeInTheDocument();
   expect(
     screen.queryByTitle('n2-standard-8: 1 node · Owners: carol (1)')
   ).not.toBeInTheDocument();
   expect(
     screen.getByTitle(
-      'a100: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
+      'Running a100: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
     )
-  ).toHaveClass('bg-green-300', 'text-gray-800');
+  ).toHaveClass('bg-orange-300', 'text-gray-800');
   expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
   expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
 
@@ -265,7 +266,7 @@ it('renders direct VMs separately from schedulable capacity', () => {
     'true'
   );
   expect(
-    screen.getByTitle('n2-standard-8: 1 node · Owners: carol (1)')
+    screen.getByTitle('Running n2-standard-8: 1 node · Owners: carol (1)')
   ).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Show all VMs' }));
@@ -282,6 +283,9 @@ it('renders direct VMs separately from schedulable capacity', () => {
     'true'
   );
   expect(screen.getByText('GCP · us-central1-b')).toBeInTheDocument();
+  expect(
+    screen.getByTitle('Stopped n2-standard-8: 1 node · Owners: bob (1)')
+  ).toHaveClass('bg-stone-300', 'text-gray-800');
   expect(
     screen.getByText(/not included in schedulable capacity/)
   ).toBeInTheDocument();
@@ -316,6 +320,7 @@ it('summarizes direct VM composition by cloud and zone', () => {
       cpuTypes: [
         {
           label: 'e2-standard-8',
+          isStopped: false,
           nodeCount: 1,
           owners: [{ label: 'alice', count: 1 }],
         },
@@ -323,6 +328,7 @@ it('summarizes direct VM composition by cloud and zone', () => {
       gpuTypes: [
         {
           label: 'h100',
+          isStopped: false,
           nodeCount: 1,
           physicalGpus: 2,
           machines: [{ label: 'a3-highgpu-2g', count: 1 }],

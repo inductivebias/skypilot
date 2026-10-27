@@ -2714,23 +2714,21 @@ const STOPPED_DIRECT_VM_STATUSES = new Set([
   'TERMINATED',
 ]);
 
-const DIRECT_VM_TYPE_COLORS = [
-  'bg-emerald-200',
-  'bg-amber-200',
-  'bg-green-300',
-  'bg-gray-300',
-  'bg-yellow-200',
-  'bg-slate-300',
-  'bg-lime-200',
-  'bg-stone-300',
-];
+const DIRECT_VM_TYPE_COLORS = {
+  cpu: ['bg-yellow-100', 'bg-yellow-200', 'bg-yellow-300', 'bg-amber-200'],
+  gpu: ['bg-orange-100', 'bg-orange-200', 'bg-orange-300', 'bg-amber-300'],
+  stopped: ['bg-gray-200', 'bg-gray-300', 'bg-slate-200', 'bg-stone-300'],
+};
 
-function directVMTypeColor(label) {
+function directVMTypeColor(label, nodeType, isStopped) {
   const hash = Array.from(label).reduce(
     (total, character) => total + character.charCodeAt(0),
     0
   );
-  return DIRECT_VM_TYPE_COLORS[hash % DIRECT_VM_TYPE_COLORS.length];
+  const colors = isStopped
+    ? DIRECT_VM_TYPE_COLORS.stopped
+    : DIRECT_VM_TYPE_COLORS[nodeType];
+  return colors[hash % colors.length];
 }
 
 function incrementCount(counts, key, amount = 1) {
@@ -2763,13 +2761,18 @@ export function summarizeDirectVMZones(instances) {
     const gpuCount = Number(instance.gpu_count) || 0;
     const machineType = instance.machine_type || 'Unknown machine';
     const owner = instance.owner || 'Unknown owner';
+    const isStopped = STOPPED_DIRECT_VM_STATUSES.has(instance.status);
+    const lifecycle = isStopped ? 'stopped' : 'running';
 
     if (gpuCount > 0) {
       summary.gpuNodes += 1;
       summary.physicalGpus += gpuCount;
       const gpuType = instance.gpu_type || 'Unknown GPU';
-      const typeSummary = summary.gpuTypes.get(gpuType) || {
+      const typeKey = `${gpuType}:${lifecycle}`;
+      const typeSummary = summary.gpuTypes.get(typeKey) || {
+        key: typeKey,
         label: gpuType,
+        isStopped,
         nodeCount: 0,
         physicalGpus: 0,
         machines: new Map(),
@@ -2779,17 +2782,20 @@ export function summarizeDirectVMZones(instances) {
       typeSummary.physicalGpus += gpuCount;
       incrementCount(typeSummary.machines, machineType);
       incrementCount(typeSummary.owners, owner);
-      summary.gpuTypes.set(gpuType, typeSummary);
+      summary.gpuTypes.set(typeKey, typeSummary);
     } else {
       summary.cpuNodes += 1;
-      const typeSummary = summary.cpuTypes.get(machineType) || {
+      const typeKey = `${machineType}:${lifecycle}`;
+      const typeSummary = summary.cpuTypes.get(typeKey) || {
+        key: typeKey,
         label: machineType,
+        isStopped,
         nodeCount: 0,
         owners: new Map(),
       };
       typeSummary.nodeCount += 1;
       incrementCount(typeSummary.owners, owner);
-      summary.cpuTypes.set(machineType, typeSummary);
+      summary.cpuTypes.set(typeKey, typeSummary);
     }
     zones.set(zoneKey, summary);
   });
@@ -2800,7 +2806,10 @@ export function summarizeDirectVMZones(instances) {
       cpuTypes: Array.from(summary.cpuTypes.values())
         .map((type) => ({ ...type, owners: sortedBreakdown(type.owners) }))
         .sort(
-          (a, b) => b.nodeCount - a.nodeCount || a.label.localeCompare(b.label)
+          (a, b) =>
+            Number(a.isStopped) - Number(b.isStopped) ||
+            b.nodeCount - a.nodeCount ||
+            a.label.localeCompare(b.label)
         ),
       gpuTypes: Array.from(summary.gpuTypes.values())
         .map((type) => ({
@@ -2809,7 +2818,10 @@ export function summarizeDirectVMZones(instances) {
           owners: sortedBreakdown(type.owners),
         }))
         .sort(
-          (a, b) => b.nodeCount - a.nodeCount || a.label.localeCompare(b.label)
+          (a, b) =>
+            Number(a.isStopped) - Number(b.isStopped) ||
+            b.nodeCount - a.nodeCount ||
+            a.label.localeCompare(b.label)
         ),
     }))
     .sort(
@@ -2821,7 +2833,12 @@ function formatDirectVMBreakdown(items) {
   return items.map(({ label, count }) => `${label} (${count})`).join(', ');
 }
 
-function DirectVMCompositionBar({ label, segments, physicalGpus = null }) {
+function DirectVMCompositionBar({
+  label,
+  nodeType,
+  segments,
+  physicalGpus = null,
+}) {
   const totalNodes = segments.reduce(
     (total, segment) => total + segment.nodeCount,
     0
@@ -2846,10 +2863,11 @@ function DirectVMCompositionBar({ label, segments, physicalGpus = null }) {
           const physicalGpuBreakdown = Number.isFinite(segment.physicalGpus)
             ? ` · ${segment.physicalGpus} physical ${segment.physicalGpus === 1 ? 'GPU' : 'GPUs'}`
             : '';
-          const details = `${segment.label}: ${segment.nodeCount} ${segment.nodeCount === 1 ? 'node' : 'nodes'}${physicalGpuBreakdown}${machineBreakdown} · Owners: ${formatDirectVMBreakdown(segment.owners)}`;
+          const lifecycle = segment.isStopped ? 'Stopped' : 'Running';
+          const details = `${lifecycle} ${segment.label}: ${segment.nodeCount} ${segment.nodeCount === 1 ? 'node' : 'nodes'}${physicalGpuBreakdown}${machineBreakdown} · Owners: ${formatDirectVMBreakdown(segment.owners)}`;
           return (
             <Tooltip
-              key={segment.label}
+              key={segment.key}
               placement="top"
               content={
                 <span className="block max-w-md rounded bg-gray-800 px-2 py-1 text-xs text-white">
@@ -2858,7 +2876,7 @@ function DirectVMCompositionBar({ label, segments, physicalGpus = null }) {
               }
             >
               <div
-                className={`flex min-w-10 items-center justify-center border-r border-white/50 px-2 text-xs font-medium text-gray-800 last:border-r-0 ${directVMTypeColor(segment.label)}`}
+                className={`flex min-w-10 items-center justify-center border-r border-white/50 px-2 text-xs font-medium text-gray-800 last:border-r-0 ${directVMTypeColor(segment.label, nodeType, segment.isStopped)}`}
                 style={{ flexBasis: 0, flexGrow: segment.nodeCount }}
                 title={details}
                 aria-label={details}
@@ -2899,18 +2917,20 @@ function DirectVMZoneSummary({ summary }) {
           </span>
         </span>
         <span className="shrink-0 text-xs text-gray-500">
-          {summary.cpuNodes} CPU · {summary.gpuNodes} GPU nodes ·{' '}
-          {summary.physicalGpus} GPUs
+          {summary.cpuNodes} CPU nodes · {summary.gpuNodes} GPU nodes (
+          {summary.physicalGpus} physical GPUs)
         </span>
       </button>
       {isExpanded && (
         <div id={contentId} className="space-y-3 border-t px-3 py-3">
           <DirectVMCompositionBar
             label="CPU nodes"
+            nodeType="cpu"
             segments={summary.cpuTypes}
           />
           <DirectVMCompositionBar
             label="GPU nodes"
+            nodeType="gpu"
             segments={summary.gpuTypes}
             physicalGpus={summary.physicalGpus}
           />
@@ -3012,14 +3032,15 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
           </p>
         ) : (
           <>
-            <div className="flex flex-wrap gap-2 mb-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+              <span className="font-medium text-gray-600">Show:</span>
               <button
                 type="button"
                 aria-pressed={visibleNodeTypes.cpu}
                 onClick={() => toggleNodeType('cpu')}
                 className={`rounded px-2 py-1 font-medium transition-opacity ${
                   visibleNodeTypes.cpu
-                    ? 'bg-sky-100 text-sky-800 ring-1 ring-inset ring-sky-300'
+                    ? 'bg-yellow-100 text-yellow-900 ring-1 ring-inset ring-yellow-300'
                     : 'bg-gray-100 text-gray-500 opacity-60 hover:opacity-100'
                 }`}
               >
@@ -3031,19 +3052,12 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
                 onClick={() => toggleNodeType('gpu')}
                 className={`rounded px-2 py-1 font-medium transition-opacity ${
                   visibleNodeTypes.gpu
-                    ? 'bg-sky-100 text-sky-800 ring-1 ring-inset ring-sky-300'
+                    ? 'bg-orange-100 text-orange-900 ring-1 ring-inset ring-orange-300'
                     : 'bg-gray-100 text-gray-500 opacity-60 hover:opacity-100'
                 }`}
               >
-                {gpuNodes} GPU nodes
+                {gpuNodes} GPU nodes ({gpuCount} physical GPUs)
               </button>
-              <span
-                className={`px-2 py-1 rounded bg-gray-100 text-gray-700 transition-opacity ${
-                  visibleNodeTypes.gpu ? '' : 'opacity-60'
-                }`}
-              >
-                {gpuCount} physical GPUs
-              </span>
             </div>
             {filteredInstances.length === 0 ? (
               <p className="mb-3 text-sm text-gray-500">
