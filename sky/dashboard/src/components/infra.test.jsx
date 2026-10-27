@@ -254,7 +254,7 @@ it('renders direct VMs separately from schedulable capacity', () => {
     screen.getByTitle(
       'a100: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
     )
-  ).toBeInTheDocument();
+  ).toHaveClass('bg-green-300', 'text-gray-800');
   expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
   expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
 
