@@ -2715,14 +2715,14 @@ const STOPPED_DIRECT_VM_STATUSES = new Set([
 ]);
 
 const DIRECT_VM_TYPE_COLORS = [
-  'bg-blue-600',
-  'bg-cyan-600',
-  'bg-indigo-600',
-  'bg-violet-600',
-  'bg-emerald-600',
-  'bg-amber-600',
-  'bg-rose-600',
-  'bg-slate-600',
+  'bg-emerald-200',
+  'bg-amber-200',
+  'bg-green-300',
+  'bg-gray-300',
+  'bg-yellow-200',
+  'bg-slate-300',
+  'bg-lime-200',
+  'bg-stone-300',
 ];
 
 function directVMTypeColor(label) {
@@ -2858,7 +2858,7 @@ function DirectVMCompositionBar({ label, segments, physicalGpus = null }) {
               }
             >
               <div
-                className={`flex min-w-10 items-center justify-center border-r border-white/50 px-2 text-xs font-medium text-white last:border-r-0 ${directVMTypeColor(segment.label)}`}
+                className={`flex min-w-10 items-center justify-center border-r border-white/50 px-2 text-xs font-medium text-gray-800 last:border-r-0 ${directVMTypeColor(segment.label)}`}
                 style={{ flexBasis: 0, flexGrow: segment.nodeCount }}
                 title={details}
                 aria-label={details}
