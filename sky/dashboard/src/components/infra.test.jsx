@@ -9,6 +9,7 @@ import {
   NodeJobHistory,
   paginateNodeJobRows,
   sortInfrastructureSections,
+  summarizeDirectVMZones,
 } from '@/components/infra';
 import { getInfraContextHref } from '@/utils/infraUtils';
 
@@ -204,8 +205,19 @@ it('renders direct VMs separately from schedulable capacity', () => {
             owner: 'alice',
             status: 'RUNNING',
             gpu_type: 'a100',
-            gpu_count: 1,
+            gpu_count: 2,
             machine_type: 'a2-highgpu-1g',
+            zone: 'us-central1-a',
+          },
+          {
+            cloud: 'GCP',
+            project: 'flourish-gpu',
+            name: 'carol-cpu',
+            owner: 'carol',
+            status: 'RUNNING',
+            gpu_type: '',
+            gpu_count: 0,
+            machine_type: 'n2-standard-8',
             zone: 'us-central1-a',
           },
           {
@@ -224,18 +236,101 @@ it('renders direct VMs separately from schedulable capacity', () => {
     />
   );
 
+  expect(screen.queryByText('alice-gpu')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '1 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  expect(screen.getByRole('button', { name: '1 GPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  expect(screen.getByText('2 physical GPUs')).toBeInTheDocument();
+  expect(screen.getByText('GCP · us-central1-a')).toBeInTheDocument();
+  expect(
+    screen.queryByTitle('n2-standard-8: 1 node · Owners: carol (1)')
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByTitle(
+      'a100: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
+    )
+  ).toBeInTheDocument();
+  expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
+  expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '1 CPU nodes' }));
+
+  expect(screen.getByRole('button', { name: '1 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  expect(
+    screen.getByTitle('n2-standard-8: 1 node · Owners: carol (1)')
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show all VMs' }));
+
   expect(screen.getByText('alice-gpu')).toBeInTheDocument();
-  expect(screen.getByText('1 GPU nodes')).toBeInTheDocument();
-  expect(screen.getByText('1 physical GPUs')).toBeInTheDocument();
+  expect(screen.getByText('carol-cpu')).toBeInTheDocument();
   expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('checkbox', { name: 'Show stopped' }));
 
   expect(screen.getByText('bob-cpu')).toBeInTheDocument();
-  expect(screen.getByText('1 CPU nodes')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '2 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  expect(screen.getByText('GCP · us-central1-b')).toBeInTheDocument();
   expect(
     screen.getByText(/not included in schedulable capacity/)
   ).toBeInTheDocument();
+});
+
+it('summarizes direct VM composition by cloud and zone', () => {
+  expect(
+    summarizeDirectVMZones([
+      {
+        cloud: 'GCP',
+        zone: 'us-central1-a',
+        owner: 'alice',
+        machine_type: 'e2-standard-8',
+        gpu_count: 0,
+      },
+      {
+        cloud: 'GCP',
+        zone: 'us-central1-a',
+        owner: 'bob',
+        machine_type: 'a3-highgpu-2g',
+        gpu_type: 'h100',
+        gpu_count: 2,
+      },
+    ])
+  ).toMatchObject([
+    {
+      cloud: 'GCP',
+      zone: 'us-central1-a',
+      cpuNodes: 1,
+      gpuNodes: 1,
+      physicalGpus: 2,
+      cpuTypes: [
+        {
+          label: 'e2-standard-8',
+          nodeCount: 1,
+          owners: [{ label: 'alice', count: 1 }],
+        },
+      ],
+      gpuTypes: [
+        {
+          label: 'h100',
+          nodeCount: 1,
+          physicalGpus: 2,
+          machines: [{ label: 'a3-highgpu-2g', count: 1 }],
+          owners: [{ label: 'bob', count: 1 }],
+        },
+      ],
+    },
+  ]);
 });
 
 it('renders GPU counts with free green, allocated yellow, and not ready red', () => {
