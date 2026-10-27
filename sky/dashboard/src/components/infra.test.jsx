@@ -204,7 +204,7 @@ it('renders direct VMs separately from schedulable capacity', () => {
             name: 'alice-gpu',
             owner: 'alice',
             status: 'RUNNING',
-            gpu_type: 'a100',
+            gpu_type: 'a100-40',
             gpu_count: 2,
             machine_type: 'a2-highgpu-1g',
             zone: 'us-central1-a',
@@ -253,9 +253,9 @@ it('renders direct VMs separately from schedulable capacity', () => {
   ).not.toBeInTheDocument();
   expect(
     screen.getByTitle(
-      'Running a100: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
+      'Running a100-40: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
     )
-  ).toHaveClass('bg-orange-300', 'text-gray-800');
+  ).toHaveClass('bg-orange-400', 'text-gray-800');
   expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
   expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
 
