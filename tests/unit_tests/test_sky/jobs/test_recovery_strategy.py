@@ -180,7 +180,7 @@ async def test_launch_healthy_runtime_without_job_fails_after_one_retry(
     executor = _launch_executor()
     _patch_launch_loop(monkeypatch)
     monkeypatch.setattr(recovery_strategy.sdk, 'stream_and_get',
-                        mock.MagicMock())
+                        mock.MagicMock(return_value=(None, None)))
     monkeypatch.setattr(recovery_strategy.global_user_state,
                         'get_handle_from_cluster_name',
                         mock.MagicMock(return_value=None))
@@ -194,6 +194,26 @@ async def test_launch_healthy_runtime_without_job_fails_after_one_retry(
     assert recovery_strategy.sdk.launch.call_count == 2
     assert executor._cleanup_cluster.call_count == 2
     assert executor._wait_until_job_starts_on_cluster.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_launch_uses_worker_receipt_without_status_poll(monkeypatch):
+    executor = _launch_executor()
+    _patch_launch_loop(monkeypatch)
+    monkeypatch.setattr(recovery_strategy.sdk, 'stream_and_get',
+                        mock.MagicMock(return_value=(17, object())))
+    monkeypatch.setattr(recovery_strategy.global_user_state,
+                        'get_handle_from_cluster_name',
+                        mock.MagicMock(return_value=None))
+    monkeypatch.setattr(recovery_strategy.time, 'time',
+                        mock.MagicMock(return_value=123.0))
+    executor._wait_until_job_starts_on_cluster = mock.AsyncMock()
+
+    submitted_at = await executor._launch(max_retry=None)
+
+    assert submitted_at == 123.0
+    assert executor.job_id_on_pool_cluster == 17
+    executor._wait_until_job_starts_on_cluster.assert_not_awaited()
 
 
 @pytest.mark.asyncio
