@@ -57,11 +57,7 @@ export const DASHBOARD_CACHE_FUNCTIONS = {
       // Empty - infra page uses progressive loading via fetchData()
       // All infra functions are background-preloaded from other pages
     ],
-    workspaces: [
-      'getWorkspaces',
-      'getClusters',
-      'getEnabledCloudsBatch',
-    ],
+    workspaces: ['getWorkspaces', 'getClusters', 'getEnabledCloudsBatch'],
     users: ['getUsers', 'getClusters'],
     volumes: ['getVolumes'],
   },
