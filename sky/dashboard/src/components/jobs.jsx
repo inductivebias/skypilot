@@ -562,7 +562,8 @@ export function ManagedJobsTable({
   const [controllerStopped, setControllerStopped] = useState(false);
   const [controllerLaunching, setControllerLaunching] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
-  const [activeTab, setActiveTab] = useState('all');
+  // Routine refreshes show unfinished jobs; history remains an explicit tab.
+  const [activeTab, setActiveTab] = useState('active');
   const [showAllMode, setShowAllMode] = useState(true);
   // Default to scoping the table to the current user's jobs. Flips to
   // 'all' when the user clicks the Everyone toggle, or implicitly when
@@ -728,6 +729,11 @@ export function ManagedJobsTable({
           workspaceMatch: getFilterValue('workspace'),
           poolMatch: getFilterValue('pool'),
           statuses: computedStatuses.length > 0 ? computedStatuses : undefined,
+          skipFinished:
+            computedStatuses.length > 0 &&
+            computedStatuses.every((status) =>
+              statusGroups.active.includes(status)
+            ),
           page: currentPage,
           limit: pageSize,
           sortBy,
