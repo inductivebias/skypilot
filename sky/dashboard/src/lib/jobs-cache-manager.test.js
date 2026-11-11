@@ -7,6 +7,7 @@ jest.mock('@/data/connectors/client', () => ({
 import { apiClient } from '@/data/connectors/client';
 import { getManagedJobs } from '@/data/connectors/jobs';
 import dashboardCache from './cache';
+import cachePreloader from './cache-preloader';
 import jobsCacheManager from './jobs-cache-manager';
 
 beforeEach(() => {
@@ -76,4 +77,12 @@ test('explicit history has a separate cache and details still request full YAML'
   const detail = apiClient.post.mock.calls[2][1];
   expect(detail.job_ids).toEqual(['123']);
   expect(detail.fields).toBeUndefined();
+});
+
+test('Jobs page preloading never fetches other pages job lists', async () => {
+  await cachePreloader.preloadForPage('jobs');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(
+    apiClient.post.mock.calls.filter(([path]) => path === '/jobs/queue/v2')
+  ).toHaveLength(0);
 });

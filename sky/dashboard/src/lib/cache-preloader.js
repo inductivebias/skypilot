@@ -3,7 +3,6 @@
 
 import dashboardCache from './cache';
 import { getClusters } from '@/data/connectors/clusters';
-import { getManagedJobs } from '@/data/connectors/jobs';
 import {
   getWorkspaces,
   getEnabledCloudsBatch,
@@ -25,11 +24,6 @@ export const DASHBOARD_CACHE_FUNCTIONS = {
   // Base functions used across multiple pages (no arguments)
   base: {
     getClusters: { fn: getClusters, args: [] },
-    // For infra/users/workspaces pages - shared cache entry
-    getManagedJobsForOtherPages: {
-      fn: getManagedJobs,
-      args: [{ allUsers: true, skipFinished: true }],
-    },
     getWorkspaces: { fn: getWorkspaces, args: [] },
     getUsers: { fn: getUsers, args: [] },
     getEnabledCloudsList: {
@@ -66,10 +60,9 @@ export const DASHBOARD_CACHE_FUNCTIONS = {
     workspaces: [
       'getWorkspaces',
       'getClusters',
-      'getManagedJobsForOtherPages',
       'getEnabledCloudsBatch',
     ],
-    users: ['getUsers', 'getClusters', 'getManagedJobsForOtherPages'],
+    users: ['getUsers', 'getClusters'],
     volumes: ['getVolumes'],
   },
 };
@@ -274,7 +267,8 @@ class CachePreloader {
     if (currentPage !== 'infra') {
       // Base functions for infra
       allOtherFunctions.add('getClusters');
-      allOtherFunctions.add('getManagedJobsForOtherPages');
+      // Job data loads only when its page needs it. Preloading other pages'
+      // active-job lists defeats the Jobs table's bounded pagination.
       allOtherFunctions.add('getEnabledCloudsList');
       allOtherFunctions.add('getWorkspaceContexts');
       allOtherFunctions.add('getSlurmInfrastructure');
