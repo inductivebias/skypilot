@@ -405,7 +405,8 @@ def request_without_retry(method, url, **kwargs) -> 'requests.Response':
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError('SkyPilot request budget exhausted')
+            raise exceptions.RequestDeadlineExceededError(
+                'SkyPilot request budget exhausted')
         timeout = kwargs.get('timeout')
         connect, read = timeout if isinstance(timeout, tuple) else (timeout,
                                                                     timeout)

@@ -155,12 +155,10 @@ def launch(
             num_jobs=num_jobs,
             file_mounts_blob_id=file_mounts_blob_id,
         )
-        response = server_common.make_authenticated_request(
-            'POST',
+        return server_common.submit_authenticated_request(
             '/jobs/launch',
             json=json.loads(body.model_dump_json()),
             timeout=(5, None))
-        return server_common.get_request_id(response)
 
 
 @usage_lib.entrypoint
