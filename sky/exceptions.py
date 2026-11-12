@@ -820,6 +820,18 @@ class GitError(Exception):
     pass
 
 
+class RequestDeadlineExceededError(TimeoutError):
+    """The SDK budget expired before the next HTTP request was sent."""
+
+
+class RequestSubmissionUncertainError(Exception):
+    """A POST may have been accepted, but its request ID is unavailable.
+
+    Callers must reconcile the original operation rather than replaying it.
+    Failures while preparing the request do not use this exception.
+    """
+
+
 class RequestInterruptedError(Exception):
     """Raised when a request is interrupted by the server.
     Client is expected to retry the request immediately when
