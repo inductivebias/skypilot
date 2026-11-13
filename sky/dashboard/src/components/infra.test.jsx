@@ -1,12 +1,15 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import {
   aggregateGPUsForContexts,
   buildNodeJobRows,
+  DirectVMInfrastructure,
   getNodeJobInfrastructureOptions,
   GpuTypeSummaryStrip,
   InfrastructureSection,
   NodeJobHistory,
   paginateNodeJobRows,
+  sortInfrastructureSections,
+  summarizeDirectVMZones,
 } from '@/components/infra';
 import { getInfraContextHref } from '@/utils/infraUtils';
 
@@ -44,6 +47,20 @@ describe('getNodeJobInfrastructureOptions', () => {
       requireNodeNames: true,
     });
   });
+});
+
+it('keeps tertiary infrastructure after inactive SSH node pools', () => {
+  const sections = [
+    { name: 'Direct VMs', hasActivity: true, tertiary: true, priority: 6 },
+    { name: 'Kubernetes', hasActivity: true, priority: 2 },
+    { name: 'SSH Node Pool', hasActivity: false, priority: 5 },
+  ];
+
+  expect(sortInfrastructureSections(sections).map(({ name }) => name)).toEqual([
+    'Kubernetes',
+    'SSH Node Pool',
+    'Direct VMs',
+  ]);
 });
 
 describe('aggregateGPUsForContexts', () => {
@@ -171,6 +188,155 @@ describe('aggregateGPUsForContexts', () => {
       },
     ]);
   });
+});
+
+it('renders direct VMs separately from schedulable capacity', () => {
+  render(
+    <DirectVMInfrastructure
+      isLoading={false}
+      inventory={{
+        configured: true,
+        errors: [],
+        instances: [
+          {
+            cloud: 'GCP',
+            project: 'flourish-gpu',
+            name: 'alice-gpu',
+            owner: 'alice',
+            status: 'RUNNING',
+            gpu_type: 'a100-40',
+            gpu_count: 2,
+            machine_type: 'a2-highgpu-1g',
+            zone: 'us-central1-a',
+          },
+          {
+            cloud: 'GCP',
+            project: 'flourish-gpu',
+            name: 'carol-cpu',
+            owner: 'carol',
+            status: 'RUNNING',
+            gpu_type: '',
+            gpu_count: 0,
+            machine_type: 'n2-standard-8',
+            zone: 'us-central1-a',
+          },
+          {
+            cloud: 'GCP',
+            project: 'flourish-gpu',
+            name: 'bob-cpu',
+            owner: 'bob',
+            status: 'TERMINATED',
+            gpu_type: '',
+            gpu_count: 0,
+            machine_type: 'n2-standard-8',
+            zone: 'us-central1-b',
+          },
+        ],
+      }}
+    />
+  );
+
+  expect(screen.queryByText('alice-gpu')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '1 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  expect(
+    screen.getByRole('button', {
+      name: '1 GPU nodes (2 physical GPUs)',
+    })
+  ).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByText('Show:')).toBeInTheDocument();
+  expect(screen.getByText('GCP · us-central1-a')).toBeInTheDocument();
+  expect(
+    screen.queryByTitle('n2-standard-8: 1 node · Owners: carol (1)')
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByTitle(
+      'Running a100-40: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
+    )
+  ).toHaveClass('bg-orange-400', 'text-gray-800');
+  expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
+  expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '1 CPU nodes' }));
+
+  expect(screen.getByRole('button', { name: '1 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  expect(
+    screen.getByTitle('Running n2-standard-8: 1 node · Owners: carol (1)')
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show all VMs' }));
+
+  expect(screen.getByText('alice-gpu')).toBeInTheDocument();
+  expect(screen.getByText('carol-cpu')).toBeInTheDocument();
+  expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show stopped' }));
+
+  expect(screen.getByText('bob-cpu')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '2 CPU nodes' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  expect(screen.getByText('GCP · us-central1-b')).toBeInTheDocument();
+  expect(
+    screen.getByTitle('Stopped n2-standard-8: 1 node · Owners: bob (1)')
+  ).toHaveClass('bg-stone-300', 'text-gray-800');
+  expect(
+    screen.getByText(/not included in schedulable capacity/)
+  ).toBeInTheDocument();
+});
+
+it('summarizes direct VM composition by cloud and zone', () => {
+  expect(
+    summarizeDirectVMZones([
+      {
+        cloud: 'GCP',
+        zone: 'us-central1-a',
+        owner: 'alice',
+        machine_type: 'e2-standard-8',
+        gpu_count: 0,
+      },
+      {
+        cloud: 'GCP',
+        zone: 'us-central1-a',
+        owner: 'bob',
+        machine_type: 'a3-highgpu-2g',
+        gpu_type: 'h100',
+        gpu_count: 2,
+      },
+    ])
+  ).toMatchObject([
+    {
+      cloud: 'GCP',
+      zone: 'us-central1-a',
+      cpuNodes: 1,
+      gpuNodes: 1,
+      physicalGpus: 2,
+      cpuTypes: [
+        {
+          label: 'e2-standard-8',
+          isStopped: false,
+          nodeCount: 1,
+          owners: [{ label: 'alice', count: 1 }],
+        },
+      ],
+      gpuTypes: [
+        {
+          label: 'h100',
+          isStopped: false,
+          nodeCount: 1,
+          physicalGpus: 2,
+          machines: [{ label: 'a3-highgpu-2g', count: 1 }],
+          owners: [{ label: 'bob', count: 1 }],
+        },
+      ],
+    },
+  ]);
 });
 
 it('renders GPU counts with free green, allocated yellow, and not ready red', () => {

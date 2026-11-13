@@ -8247,6 +8247,60 @@ def api_info(output_format: str):
     server_common.check_and_print_upgrade_hint(api_server_info, url)
 
 
+@api.command('direct-vms', cls=_DocumentedCodeCommand)
+@click.option('--all',
+              'show_all',
+              is_flag=True,
+              default=False,
+              help='Include stopped direct VMs.')
+@click.option('--owner', type=str, help='Show only VMs owned by this slug.')
+@flags.output_format_option()
+@flags.config_option(expose_value=False)
+@usage_lib.entrypoint
+def api_direct_vms(show_all: bool, owner: Optional[str],
+                   output_format: str) -> None:
+    """Lists direct VMs outside SkyPilot scheduling."""
+    inventory = sdk.direct_vm_inventory()
+    instances = inventory.get('instances', [])
+    if not show_all:
+        instances = [i for i in instances if i.get('status') == 'RUNNING']
+    if owner is not None:
+        instances = [i for i in instances if i.get('owner') == owner]
+
+    if output_format == flags.OUTPUT_FORMAT_JSON:
+        click.echo(json.dumps({
+            **inventory,
+            'instances': instances,
+        }, indent=2))
+        return
+
+    if not inventory.get('configured'):
+        click.echo('Direct VM inventory is not configured on this server.')
+        return
+
+    table = log_utils.create_table(
+        ['PROJECT', 'NAME', 'OWNER', 'STATUS', 'MACHINE', 'GPU', 'ZONE'])
+    for instance in instances:
+        gpu_count = instance.get('gpu_count', 0)
+        gpu = ('CPU' if gpu_count == 0 else
+               f'{gpu_count}x {instance.get("gpu_type") or "GPU"}')
+        table.add_row([
+            instance.get('project') or '-',
+            instance.get('name') or '-',
+            instance.get('owner') or '-',
+            instance.get('status') or '-',
+            instance.get('machine_type') or '-',
+            gpu,
+            instance.get('zone') or '-',
+        ])
+    click.echo(table)
+    for error in inventory.get('errors', []):
+        click.echo(
+            f'Warning: {error.get("project", "unknown")}: '
+            f'{error.get("message", "inventory unavailable")}',
+            err=True)
+
+
 @cli.group(cls=_NaturalOrderGroup)
 def workspace():
     """Per-user workspace commands."""

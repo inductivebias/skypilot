@@ -1,5 +1,8 @@
 import { apiClient } from '@/data/connectors/client';
-import { getContextGPUData } from '@/data/connectors/infra';
+import {
+  getContextGPUData,
+  getDirectVMInventory,
+} from '@/data/connectors/infra';
 
 jest.mock('@/data/connectors/client', () => ({
   apiClient: {
@@ -144,5 +147,31 @@ describe('getContextGPUData', () => {
         gpu_max: 42,
       }),
     ]);
+  });
+});
+
+describe('getDirectVMInventory', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns normalized direct VM inventory from the immediate endpoint', async () => {
+    apiClient.get.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        configured: true,
+        observed_at: '2026-10-19T12:00:00+00:00',
+        instances: [{ name: 'alice-gpu', status: 'RUNNING' }],
+        errors: [],
+      }),
+    });
+
+    await expect(getDirectVMInventory()).resolves.toEqual({
+      configured: true,
+      observed_at: '2026-10-19T12:00:00+00:00',
+      instances: [{ name: 'alice-gpu', status: 'RUNNING' }],
+      errors: [],
+    });
+    expect(apiClient.get).toHaveBeenCalledWith('/direct_vm_inventory');
   });
 });
