@@ -264,6 +264,8 @@ class RequestWorker:
             if metrics_utils.METRICS_ENABLED:
                 if self.schedule_type == api_requests.ScheduleType.LONG:
                     metrics_utils.SKY_APISERVER_LONG_EXECUTORS.dec()
+                elif self.schedule_type == api_requests.ScheduleType.LONG_PROTECTED:
+                    metrics_utils.SKY_APISERVER_PROTECTED_LONG_EXECUTORS.dec()
                 elif self.schedule_type == api_requests.ScheduleType.SHORT:
                     metrics_utils.SKY_APISERVER_SHORT_EXECUTORS.dec()
             # Monitor the result of the request execution.
@@ -290,6 +292,8 @@ class RequestWorker:
             return
         if self.schedule_type == api_requests.ScheduleType.LONG:
             metrics_utils.SKY_APISERVER_LONG_EXECUTORS.inc()
+        elif self.schedule_type == api_requests.ScheduleType.LONG_PROTECTED:
+            metrics_utils.SKY_APISERVER_PROTECTED_LONG_EXECUTORS.inc()
         elif self.schedule_type == api_requests.ScheduleType.SHORT:
             metrics_utils.SKY_APISERVER_SHORT_EXECUTORS.inc()
 
@@ -394,6 +398,9 @@ class RequestWorker:
             if metrics_utils.METRICS_ENABLED:
                 if self.schedule_type == api_requests.ScheduleType.LONG:
                     metrics_utils.SKY_APISERVER_LONG_EXECUTORS.set(
+                        total_executors)
+                elif self.schedule_type == api_requests.ScheduleType.LONG_PROTECTED:
+                    metrics_utils.SKY_APISERVER_PROTECTED_LONG_EXECUTORS.set(
                         total_executors)
                 elif self.schedule_type == api_requests.ScheduleType.SHORT:
                     metrics_utils.SKY_APISERVER_SHORT_EXECUTORS.set(
@@ -1193,6 +1200,12 @@ def start(
                                 config=config.long_worker_config)
     long_worker.run_in_background()
     workers.append(long_worker)
+
+    protected_long_worker = RequestWorker(
+        schedule_type=api_requests.ScheduleType.LONG_PROTECTED,
+        config=config.protected_long_worker_config)
+    protected_long_worker.run_in_background()
+    workers.append(protected_long_worker)
 
     # Start a worker for short requests.
     short_worker = RequestWorker(schedule_type=api_requests.ScheduleType.SHORT,

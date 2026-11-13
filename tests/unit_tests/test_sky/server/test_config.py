@@ -16,7 +16,8 @@ def test_compute_server_config_on_minimal_deployment(cpu_count, mem_size_gb):
     assert c.num_server_workers == 4
     assert c.long_worker_config.garanteed_parallelism == 8
     assert c.long_worker_config.burstable_parallelism == 0
-    assert c.short_worker_config.garanteed_parallelism == 9
+    assert c.protected_long_worker_config.garanteed_parallelism == 1
+    assert c.short_worker_config.garanteed_parallelism == 8
     assert c.short_worker_config.burstable_parallelism == 0
     assert c.queue_backend == config.QueueBackend.MULTIPROCESSING
 
@@ -29,7 +30,8 @@ def test_compute_server_config_on_large_deployment(cpu_count, mem_size_gb):
     assert c.num_server_workers == 196
     assert c.long_worker_config.garanteed_parallelism == 392
     assert c.long_worker_config.burstable_parallelism == 0
-    assert c.short_worker_config.garanteed_parallelism == 2084
+    assert c.protected_long_worker_config.garanteed_parallelism == 1
+    assert c.short_worker_config.garanteed_parallelism == 2082
     assert c.short_worker_config.burstable_parallelism == 0
     assert c.queue_backend == config.QueueBackend.MULTIPROCESSING
 
@@ -42,7 +44,8 @@ def test_compute_server_config(cpu_count, mem_size_gb):
     assert c.num_server_workers == 4
     assert c.long_worker_config.garanteed_parallelism == 8
     assert c.long_worker_config.burstable_parallelism == 0
-    assert c.short_worker_config.garanteed_parallelism == 36
+    assert c.protected_long_worker_config.garanteed_parallelism == 1
+    assert c.short_worker_config.garanteed_parallelism == 34
     assert c.short_worker_config.burstable_parallelism == 0
     assert c.queue_backend == config.QueueBackend.MULTIPROCESSING
 
@@ -51,6 +54,8 @@ def test_compute_server_config(cpu_count, mem_size_gb):
     assert c.num_server_workers == 1
     assert c.long_worker_config.garanteed_parallelism == 4
     assert c.long_worker_config.burstable_parallelism == 1024
+    assert c.protected_long_worker_config.garanteed_parallelism == 0
+    assert c.protected_long_worker_config.burstable_parallelism == 1024
     assert c.short_worker_config.garanteed_parallelism == 41
     assert c.short_worker_config.burstable_parallelism == 1024
     assert c.queue_backend == config.QueueBackend.LOCAL
@@ -64,6 +69,7 @@ def test_compute_server_config_low_resources(cpu_count, mem_size_gb):
     assert c.num_server_workers == 1
     assert c.long_worker_config.garanteed_parallelism == 0
     assert c.long_worker_config.burstable_parallelism == 1024
+    assert c.protected_long_worker_config.garanteed_parallelism == 0
     assert c.short_worker_config.garanteed_parallelism == 0
     assert c.short_worker_config.burstable_parallelism == 1024
     assert c.queue_backend == config.QueueBackend.LOCAL
@@ -73,6 +79,7 @@ def test_compute_server_config_low_resources(cpu_count, mem_size_gb):
     assert c.num_server_workers == 1
     assert c.long_worker_config.garanteed_parallelism == 1
     assert c.long_worker_config.burstable_parallelism == 0
+    assert c.protected_long_worker_config.garanteed_parallelism == 1
     assert c.short_worker_config.garanteed_parallelism == 5
     assert c.short_worker_config.burstable_parallelism == 0
     assert c.queue_backend == config.QueueBackend.MULTIPROCESSING
@@ -93,7 +100,8 @@ def test_compute_server_config_pool(cpu_count, mem_size_gb, buildkite_mock):
     assert c.num_server_workers == 12
     assert c.long_worker_config.garanteed_parallelism == 24
     assert c.long_worker_config.burstable_parallelism == 0
-    assert c.short_worker_config.garanteed_parallelism == 114
+    assert c.protected_long_worker_config.garanteed_parallelism == 1
+    assert c.short_worker_config.garanteed_parallelism == 113
     assert c.short_worker_config.burstable_parallelism == 0
     assert c.queue_backend == config.QueueBackend.MULTIPROCESSING
 

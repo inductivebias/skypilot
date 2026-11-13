@@ -161,6 +161,11 @@ SKY_APISERVER_LONG_EXECUTORS = prom.Gauge(
     'Total number of long-running request executors in the API server',
 )
 
+SKY_APISERVER_PROTECTED_LONG_EXECUTORS = prom.Gauge(
+    'sky_apiserver_protected_long_executors',
+    'Total number of protected long-running request executors in the API server',
+)
+
 SKY_APISERVER_SHORT_EXECUTORS = prom.Gauge(
     'sky_apiserver_short_executors',
     'Total number of short-running request executors in the API server',
