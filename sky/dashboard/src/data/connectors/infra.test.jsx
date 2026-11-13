@@ -1,5 +1,8 @@
 import { apiClient } from '@/data/connectors/client';
-import { getContextGPUData } from '@/data/connectors/infra';
+import {
+  getContextGPUData,
+  summarizeKubernetesDemand,
+} from '@/data/connectors/infra';
 
 jest.mock('@/data/connectors/client', () => ({
   apiClient: {
@@ -144,5 +147,46 @@ describe('getContextGPUData', () => {
         gpu_max: 42,
       }),
     ]);
+  });
+
+  it('summarizes pending pods and exact provider capacity evidence', () => {
+    expect(
+      summarizeKubernetesDemand(
+        [
+          { phase: 'Pending', accelerators: 8 },
+          { phase: 'Running', accelerators: 8 },
+          { phase: 'Pending', accelerators: 0 },
+        ],
+        [
+          {
+            node_pool: 'h100ib-rno2a-spot',
+            target_nodes: 1,
+            queued_nodes: 1,
+            in_progress_nodes: 0,
+            capacity_condition: {
+              status: 'False',
+              reason: 'CWInsufficientCapacity',
+              message: '1 pending node awaits spot capacity.',
+              lastTransitionTime: '2026-10-25T03:00:05Z',
+            },
+          },
+        ]
+      )
+    ).toEqual({
+      pendingPods: 1,
+      pendingGpus: 8,
+      runningPods: 1,
+      targetNodes: 1,
+      queuedNodes: 1,
+      inProgressNodes: 0,
+      capacityIssues: [
+        {
+          nodePool: 'h100ib-rno2a-spot',
+          reason: 'CWInsufficientCapacity',
+          message: '1 pending node awaits spot capacity.',
+          lastTransitionTime: '2026-10-25T03:00:05Z',
+        },
+      ],
+    });
   });
 });

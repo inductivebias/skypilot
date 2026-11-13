@@ -969,6 +969,16 @@ def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
                 },
                 'status': {
                     'currentNodes': 3,
+                    'targetNodes': 5,
+                    'queuedNodes': 1,
+                    'inProgress': 1,
+                    'conditions': [{
+                        'type': 'Capacity',
+                        'status': 'False',
+                        'reason': 'CWInsufficientCapacity',
+                        'message': '1 pending node awaits spot capacity.',
+                        'lastTransitionTime': '2026-10-25T03:00:05Z',
+                    }],
                 },
             }]
         }
@@ -989,6 +999,15 @@ def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
         'current_nodes': 3,
         'min_nodes': 1,
         'max_nodes': 10,
+        'target_nodes': 5,
+        'queued_nodes': 1,
+        'in_progress_nodes': 1,
+        'capacity_condition': {
+            'status': 'False',
+            'reason': 'CWInsufficientCapacity',
+            'message': '1 pending node awaits spot capacity.',
+            'lastTransitionTime': '2026-10-25T03:00:05Z',
+        },
     }]
     assert second[0].max_nodes == 20
     api.list_cluster_custom_object.assert_has_calls([
@@ -999,6 +1018,64 @@ def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
              version='v1alpha1',
              plural='nodepools'),
     ])
+
+
+def test_cks_autoscaling_capacity_respects_context_allowed_node_labels():
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.return_value = {
+        'items': [{
+            'metadata': {
+                'name': 'h100ib-rno2a-spot',
+                'annotations': {
+                    'skypilot.co/accelerators-per-node': '8',
+                },
+            },
+            'spec': {
+                'autoscaling': True,
+                'minNodes': 0,
+                'maxNodes': 8,
+                'nodeLabels': {
+                    'skypilot.co/accelerator': 'h100',
+                    'flourishlabs.ai/capacity-profile': 'rno2a-h100-spot',
+                },
+            },
+            'status': {
+                'currentNodes': 0,
+            },
+        }]
+    }
+    allowed_nodes = {
+        'reserve': {
+            'label_selector': {
+                'flourishlabs.ai/capacity-profile': 'rno2a-h100-reserve',
+            },
+        },
+        'spot': {
+            'label_selector': {
+                'flourishlabs.ai/capacity-profile': 'rno2a-h100-spot',
+            },
+        },
+    }
+
+    with mock.patch(
+            'sky.provision.kubernetes.utils.kubernetes.'
+            'custom_resources_api',
+            return_value=api), mock.patch.object(
+                utils,
+                'get_allowed_nodes_config',
+                side_effect=lambda context: allowed_nodes[context]):
+        reserve = utils._get_cks_autoscaling_capacity('reserve')
+        spot = utils._get_cks_autoscaling_capacity('spot')
+
+    assert not reserve
+    assert [capacity.to_dict() for capacity in spot] == [{
+        'node_pool': 'h100ib-rno2a-spot',
+        'accelerator_type': 'H100',
+        'accelerators_per_node': 8,
+        'current_nodes': 0,
+        'min_nodes': 0,
+        'max_nodes': 8,
+    }]
 
 
 def test_karpenter_autoscaling_capacity_excludes_static_pools():

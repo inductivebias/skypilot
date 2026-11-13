@@ -121,9 +121,20 @@ class KubernetesAutoscalingCapacity:
     current_nodes: int
     min_nodes: int
     max_nodes: int
+    # Provider-specific live demand. None means the provider does not expose
+    # the field; zero is an authoritative zero.
+    target_nodes: Optional[int] = None
+    queued_nodes: Optional[int] = None
+    in_progress_nodes: Optional[int] = None
+    # The provider's exact capacity condition, when available.
+    capacity_condition: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return dataclasses.asdict(self)
+        return {
+            key: value
+            for key, value in dataclasses.asdict(self).items()
+            if value is not None
+        }
 
 
 @dataclasses.dataclass
