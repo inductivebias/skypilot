@@ -1,6 +1,7 @@
 """Tests for bounded persisted job logs."""
 
 import os
+import selectors
 import shlex
 import signal
 import subprocess
@@ -31,6 +32,31 @@ def test_make_bounded_log_command_preserves_short_output(tmp_path):
 
     assert result.returncode == 0
     assert log_path.read_text(encoding='utf-8') == 'hello\n'
+
+
+def test_make_bounded_log_command_streams_short_output_before_exit():
+    producer = ('import sys; print("ready", flush=True); '
+                'sys.stdin.read(1)')
+    command = job_lib.make_bounded_log_command(
+        f'{sys.executable} -c {shlex.quote(producer)}', max_bytes=128)
+    process = subprocess.Popen(command,
+                               shell=True,
+                               stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+    assert process.stdin is not None
+    assert process.stdout is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        assert selector.select(timeout=5), (
+            'flushed output was not streamed while the producer was running')
+        assert process.stdout.readline() == b'ready\n'
+        assert process.poll() is None
+    finally:
+        selector.close()
+        process.stdin.close()
+        process.wait(timeout=5)
 
 
 def test_make_bounded_log_command_expands_home_on_target(monkeypatch, tmp_path):
