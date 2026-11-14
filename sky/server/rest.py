@@ -5,6 +5,9 @@ import contextlib
 import contextvars
 import functools
 import html
+# FL:START
+import math
+# FL:END
 import os
 import re
 import time
@@ -64,6 +67,34 @@ class RetryContext:
 
 _RETRY_CONTEXT: contextvars.ContextVar[Optional[RetryContext]] = (
     contextvars.ContextVar('retry_context', default=None))
+
+# FL:START
+_REQUEST_DEADLINE: contextvars.ContextVar[Optional[float]] = (
+    contextvars.ContextVar('request_deadline', default=None))
+
+
+@contextlib.contextmanager
+def request_timeout(seconds: float) -> typing.Iterator[None]:
+    """Bound synchronous SDK network waits; the caller owns retries.
+
+    Services must not inherit the CLI's indefinite result waits or long
+    availability retries. Each HTTP connect/read timeout is capped by the
+    remaining budget. This is a network inactivity bound, not cancellation of
+    server work; a timed-out launch may still create a job.
+    """
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError('request timeout must be positive and finite')
+    deadline = time.monotonic() + seconds
+    previous = _REQUEST_DEADLINE.get()
+    token = _REQUEST_DEADLINE.set(
+        min(previous, deadline) if previous is not None else deadline)
+    try:
+        yield
+    finally:
+        _REQUEST_DEADLINE.reset(token)
+
+
+# FL:END
 
 _session = requests.Session()
 # Tune connection pool size, otherwise the default max is just 10.
@@ -172,10 +203,18 @@ def retry_transient_errors(max_retries: int = 3,
                     # during rolling update, we can retry immediately on the
                     # new replica.
                     except exceptions.RequestInterruptedError:
+                        # FL:START
+                        if _REQUEST_DEADLINE.get() is not None:
+                            raise
+                        # FL:END
                         _handle_exception()
                         logger.debug('Request interrupted. Retry immediately.')
                         continue
                     except Exception as e:  # pylint: disable=broad-except
+                        # FL:START
+                        if _REQUEST_DEADLINE.get() is not None:
+                            raise
+                        # FL:END
                         _handle_exception()
                         if consecutive_failed_count >= max_retries:
                             # Retries exhausted.
@@ -239,6 +278,10 @@ def _retry_on_server_unavailable(max_wait_seconds: int = 600,
                     try:
                         return func(*args, **kwargs)
                     except exceptions.ServerTemporarilyUnavailableError as e:
+                        # FL:START
+                        if _REQUEST_DEADLINE.get() is not None:
+                            raise
+                        # FL:END
                         # This will cause the status spinner being stopped and
                         # restarted in every retry loop. But it is necessary to
                         # stop the status spinner before retrying func() to
@@ -369,6 +412,20 @@ def request(method, url, **kwargs) -> 'requests.Response':
 
 def request_without_retry(method, url, **kwargs) -> 'requests.Response':
     """Send a request to the API server without retry."""
+    # FL:START
+    deadline = _REQUEST_DEADLINE.get()
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise exceptions.RequestDeadlineExceededError(
+                'SkyPilot request budget exhausted')
+        timeout = kwargs.get('timeout')
+        connect, read = timeout if isinstance(timeout, tuple) else (timeout,
+                                                                    timeout)
+        kwargs['timeout'] = tuple(
+            min(value, remaining) if value is not None else remaining
+            for value in (connect, read))
+    # FL:END
     response = _session.request(method, url, **kwargs)
     handle_server_unavailable(response)
     # TODO (kyuds): investigate into whether we can remove this as we
