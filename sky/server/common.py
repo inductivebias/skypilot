@@ -366,6 +366,30 @@ def make_authenticated_request(method: str,
         return rest.request_without_retry(method, url, **kwargs)
 
 
+# FL:START
+def submit_authenticated_request(path: str, **kwargs) -> RequestId[Any]:
+    """Submit a POST, distinguishing preparation from uncertain delivery.
+
+    Raises:
+        exceptions.RequestSubmissionUncertainError: Delivery or acknowledgement
+            failed after preparation; the operation may still run on the server.
+    """
+    # Authentication can fail without sending anything. Only transport and
+    # acknowledgement decoding cross the boundary where replay is unsafe.
+    url, params = _prepare_authenticated_request_params(path, **kwargs)
+    try:
+        response = rest.request('POST', url, **params)
+        return get_request_id(response)
+    except exceptions.RequestDeadlineExceededError:
+        raise  # the transport rejected the call before sending the POST
+    except Exception as error:
+        raise exceptions.RequestSubmissionUncertainError(
+            'Request acknowledgement unavailable') from error
+
+
+# FL:END
+
+
 async def make_authenticated_request_async(
         session: 'aiohttp.ClientSession',
         method: str,

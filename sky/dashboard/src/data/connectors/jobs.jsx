@@ -63,7 +63,10 @@ const DEFAULT_FIELDS = [
   'pool_hash',
   'details',
   'failure_reason',
-  'user_yaml',
+  //FL:START
+  // Load YAML only for explicit job details, not every row in a job list.
+  // 'user_yaml',
+  //FL:END
   'entrypoint',
   'metadata',
   'is_job_group',

@@ -1,4 +1,7 @@
 """Unit tests for the SkyPilot REST API client module."""
+# FL:START
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import threading
 import time
 from unittest import mock
@@ -9,7 +12,85 @@ import requests
 from sky import exceptions
 from sky.server import rest
 
+# FL:END
+
 request_err = requests.exceptions.ChunkedEncodingError("Test error")
+
+
+# FL:START
+@pytest.mark.parametrize('method', ['GET', 'POST'])
+def test_request_timeout_closes_stalled_read_and_allows_next_request(
+        method: str) -> None:
+    """A result with no completion headers cannot hold a scheduler thread forever."""
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        """Minimal external HTTP peer with controlled failure behaviour."""
+
+        def do_GET(self) -> None:  # pylint: disable=invalid-name
+            if self.path == '/stalled':
+                release.wait(5)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+        do_POST = do_GET  # pylint: disable=invalid-name
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        worker = threading.Thread(target=server.serve_forever)
+        worker.start()
+        endpoint = f'http://127.0.0.1:{server.server_port}'
+        try:
+            for _ in range(3):
+                started = time.monotonic()
+                with pytest.raises(requests.exceptions.Timeout):
+                    with rest.request_timeout(0.1):
+                        rest.request(method,
+                                     endpoint + '/stalled',
+                                     timeout=(5, None))
+                assert time.monotonic() - started < 2
+            assert rest.request('GET', endpoint + '/ok', timeout=1).text == 'ok'
+        finally:
+            release.set()
+            server.shutdown()
+            worker.join(timeout=2)
+
+
+def test_request_timeout_does_not_retry_unavailable_server() -> None:
+    """The service's next cycle owns retries; a POST is not replayed here."""
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        """Minimal external HTTP peer with controlled failure behaviour."""
+
+        def do_POST(self) -> None:  # pylint: disable=invalid-name
+            calls.append(self.path)
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b'unavailable')
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        worker = threading.Thread(target=server.serve_forever)
+        worker.start()
+        try:
+            with pytest.raises(exceptions.ServerTemporarilyUnavailableError):
+                with rest.request_timeout(1):
+                    rest.request(
+                        'POST', f'http://127.0.0.1:{server.server_port}/launch')
+            assert calls == ['/launch']
+        finally:
+            server.shutdown()
+            worker.join(timeout=2)
+
+
+# FL:END
 
 
 class TestHandleResponseText:

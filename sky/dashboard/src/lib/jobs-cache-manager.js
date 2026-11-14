@@ -43,6 +43,9 @@ class JobsCacheManager {
       sortBy = 'submitted_at',
       sortOrder = 'desc',
       allUsers = true,
+      //FL:START
+      skipFinished = false,
+      //FL:END
       jobIdMatch,
       nameMatch,
       userMatch,
@@ -58,6 +61,9 @@ class JobsCacheManager {
       sortBy,
       sortOrder,
       allUsers,
+      //FL:START
+      skipFinished,
+      //FL:END
       jobIdMatch: jobIdMatch || null,
       nameMatch: nameMatch || null,
       userMatch: userMatch || null,
@@ -76,6 +82,9 @@ class JobsCacheManager {
   _generateFilterKey(options) {
     const {
       allUsers = true,
+      //FL:START
+      skipFinished = false,
+      //FL:END
       jobIdMatch,
       nameMatch,
       userMatch,
@@ -86,6 +95,9 @@ class JobsCacheManager {
 
     const keyObj = {
       allUsers,
+      //FL:START
+      skipFinished,
+      //FL:END
       jobIdMatch: jobIdMatch || null,
       nameMatch: nameMatch || null,
       userMatch: userMatch || null,
@@ -147,6 +159,10 @@ class JobsCacheManager {
         ...filterOptions,
         page,
         limit,
+        //FL:START
+        sortBy,
+        sortOrder,
+        //FL:END
       },
     ]);
 
@@ -456,7 +472,10 @@ class JobsCacheManager {
           !isPluginAvailable() &&
           !this.backgroundPrefetching.has(filterKey)
         ) {
-          this._kickOffBackgroundPrefetch(options, filterKey);
+          //FL:START
+          // Bound refreshes to one page; retain upstream helpers for merges.
+          // this._kickOffBackgroundPrefetch(options, filterKey);
+          //FL:END
         }
 
         return result;
@@ -592,6 +611,9 @@ class JobsCacheManager {
         const keyObj = JSON.parse(key);
         const keyFilterObj = {
           allUsers: keyObj.allUsers,
+          //FL:START
+          skipFinished: keyObj.skipFinished,
+          //FL:END
           jobIdMatch: keyObj.jobIdMatch,
           nameMatch: keyObj.nameMatch,
           userMatch: keyObj.userMatch,
