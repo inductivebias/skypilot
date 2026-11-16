@@ -1160,7 +1160,11 @@ available_node_types:
 
                 # set UV_SYSTEM_PYTHON to false in case the user provided docker image set it to true.
                 # unset PYTHONPATH and set CWD to $HOME to avoid user image interfering with SkyPilot runtime.
-                VIRTUAL_ENV=${SKY_RUNTIME_DIR:-$HOME}/skypilot-runtime UV_LINK_MODE=copy UV_SYSTEM_PYTHON=false {{sky_unset_pythonpath_and_set_cwd}} ~/.local/bin/uv pip install skypilot[kubernetes,remote]
+                # FL:START
+                # Bootstrap Ray patches must match the controller's runtime.
+                # Our exact fork wheel replaces this preliminary install later.
+                VIRTUAL_ENV=${SKY_RUNTIME_DIR:-$HOME}/skypilot-runtime UV_LINK_MODE=copy UV_SYSTEM_PYTHON=false {{sky_unset_pythonpath_and_set_cwd}} ~/.local/bin/uv pip install "skypilot[kubernetes,remote]=={{sky_version}}"
+                # FL:END
                 # Wait for `patch` package to be installed before applying ray patches
                 until dpkg -l | grep -q "^ii  patch "; do
                   sleep 0.1
