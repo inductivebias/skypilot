@@ -40,16 +40,9 @@ export const DASHBOARD_CACHE_FUNCTIONS = {
   // Base functions used across multiple pages (no arguments)
   base: {
     getClusters: { fn: getClusters, args: [] },
-    // For jobs page - uses client-side pagination wrapper
-    getManagedJobs: {
-      fn: getManagedJobsWithClientPagination,
-      args: [{ allUsers: true }],
-    },
-    // For infra/users/workspaces pages - shared cache entry
-    getManagedJobsForOtherPages: {
-      fn: getManagedJobs,
-      args: [{ allUsers: true, skipFinished: true }],
-    },
+    //FL:START
+    // Pages fetch their own job lists; omit these entries from all preloads.
+    //FL:END
     getWorkspaces: { fn: getWorkspaces, args: [] },
     getUsers: { fn: getUsers, args: [] },
     getEnabledCloudsList: {

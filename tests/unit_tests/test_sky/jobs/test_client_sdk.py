@@ -1,11 +1,119 @@
 """Unit tests for managed jobs client SDK queue helpers."""
+# FL:START
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
+import json
+from pathlib import Path
+import threading
+import time
 from unittest import mock
 
 import pytest
 
+import sky
+from sky import exceptions
 from sky.jobs import constants as managed_job_constants
 from sky.jobs.client import sdk as jobs_sdk
 from sky.jobs.client import sdk_async as jobs_sdk_async
+from sky.server import common as server_common
+from sky.server import constants as server_constants
+from sky.server import rest
+
+# FL:END
+
+
+# FL:START
+@pytest.mark.parametrize('failure', [
+    'health', 'workdir', 'mount', 'credentials', 'expired_budget', 'lost_ack',
+    'missing_id', 'success'
+])
+def test_launch_classifies_the_submission_boundary(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str) -> None:
+    """Distinguish preparation from delivery with the real SDK and HTTP peer."""
+    posts = []
+
+    class Handler(BaseHTTPRequestHandler):
+        """Expose failures before submission and after accepting a launch."""
+
+        def do_GET(self) -> None:  # pylint: disable=invalid-name
+            assert self.path == '/api/health'
+            self.send_response(503 if failure == 'health' else 200)
+            self.send_header(server_constants.API_VERSION_HEADER,
+                             str(server_constants.API_VERSION))
+            self.send_header(server_constants.VERSION_HEADER, sky.__version__)
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({
+                    'status': 'healthy',
+                    'api_version': server_constants.API_VERSION,
+                    'version': sky.__version__,
+                    'commit': sky.__commit__,
+                }).encode())
+
+        def do_POST(self) -> None:  # pylint: disable=invalid-name
+            self.rfile.read(int(self.headers['Content-Length']))
+            if self.path == '/validate':
+                self.send_response(200)
+                self.end_headers()
+                return
+            posts.append(self.path)
+            if failure == 'lost_ack':
+                self.close_connection = True
+                return
+            self.send_response(200)
+            if failure == 'success':
+                self.send_header('X-Skypilot-Request-ID', 'accepted-request')
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    monkeypatch.setenv('SKYPILOT_DISABLE_USAGE_COLLECTION', '1')
+    monkeypatch.setenv('SKYPILOT_SERVICE_ACCOUNT_TOKEN', 'sky_test')
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        worker = threading.Thread(target=server.serve_forever)
+        worker.start()
+        monkeypatch.setenv('SKYPILOT_API_SERVER_ENDPOINT',
+                           f'http://127.0.0.1:{server.server_port}')
+        server_common.get_server_url.cache_clear()
+        task = sky.Task(run='true')
+        if failure == 'workdir':
+            task.workdir = str(tmp_path / 'missing')
+        elif failure == 'mount':
+            task.set_file_mounts({'/tmp/input': str(tmp_path / 'missing')})
+        try:
+            with rest.request_timeout(1):
+                if failure == 'credentials':
+                    monkeypatch.setenv('SKYPILOT_SERVICE_ACCOUNT_TOKEN',
+                                       'invalid')
+                    with pytest.raises(ValueError, match='token format'):
+                        server_common.submit_authenticated_request(
+                            '/jobs/launch', json={})
+                elif failure == 'expired_budget':
+                    expired = time.monotonic() + 2
+                    monkeypatch.setattr(time, 'monotonic', lambda: expired)
+                    with pytest.raises(exceptions.RequestDeadlineExceededError):
+                        server_common.submit_authenticated_request(
+                            '/jobs/launch', json={})
+                elif failure == 'success':
+                    assert jobs_sdk.launch(task) == 'accepted-request'
+                else:
+                    expected = (exceptions.RequestSubmissionUncertainError
+                                if failure in ('lost_ack', 'missing_id') else
+                                exceptions.ServerTemporarilyUnavailableError
+                                if failure == 'health' else ValueError)
+                    with pytest.raises(expected):
+                        jobs_sdk.launch(task)
+            assert posts == (['/jobs/launch'] if failure in ('lost_ack',
+                                                             'missing_id',
+                                                             'success') else [])
+        finally:
+            server.shutdown()
+            worker.join(timeout=2)
+            server_common.get_server_url.cache_clear()
+
+
+# FL:END
 
 
 def _unwrap(fn):
