@@ -1,9 +1,13 @@
 import os
 import pathlib
+import shlex
 from unittest import mock
 
+import jinja2
+from packaging.requirements import Requirement
 import pytest
 
+import sky
 from sky import backends
 from sky import check as sky_check
 from sky import clouds
@@ -232,6 +236,24 @@ def test_aws_template_applies_labels_to_volume_tags() -> None:
     assert expected_block in template
 
 
+# FL:START
+def test_kubernetes_bootstrap_rejects_unrelated_skypilot_release() -> None:
+    """A new PyPI release must not change patches used before our wheel arrives."""
+    template = pathlib.Path('sky/templates/kubernetes-ray.yml.j2').read_text()
+    install = next(
+        line for line in template.splitlines()
+        if 'pip install' in line and 'skypilot[kubernetes,remote]' in line)
+    command = jinja2.Template(install, undefined=jinja2.StrictUndefined).render(
+        sky_version=sky.__version__,
+        sky_unset_pythonpath_and_set_cwd='env -u PYTHONPATH')
+    requirement = Requirement(shlex.split(command)[-1])
+    assert requirement.name == 'skypilot'
+    assert requirement.extras == {'kubernetes', 'remote'}
+    assert str(requirement.specifier) == f'=={sky.__version__}'
+    assert not requirement.specifier.contains('0.14.3')
+
+
+# FL:END
 def test_get_clusters_launch_refresh(monkeypatch):
     # verifies that `get_clusters` works when one cluster is launching
     # and other is not.
