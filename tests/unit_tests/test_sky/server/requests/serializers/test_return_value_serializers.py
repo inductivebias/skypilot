@@ -291,6 +291,47 @@ class TestSerializeKubernetesNodeInfo:
     @mock.patch(
         'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
     )
+    def test_provider_demand_requires_api_version_62(self, mock_get_version):
+        data = {
+            'node_info_dict': {},
+            'hint': '',
+            'autoscaling_capacity': [{
+                'node_pool': 'h100-spot',
+                'accelerator_type': 'H100',
+                'accelerators_per_node': 8,
+                'current_nodes': 0,
+                'min_nodes': 0,
+                'max_nodes': 8,
+                'target_nodes': 1,
+                'queued_nodes': 1,
+                'in_progress_nodes': 0,
+                'capacity_condition': {
+                    'reason': 'CWInsufficientCapacity',
+                    'message': '1 pending node awaits spot capacity.',
+                },
+            }],
+        }
+        mock_get_version.return_value = 61
+
+        old_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+        old_capacity = json.loads(old_result)['autoscaling_capacity'][0]
+
+        assert 'target_nodes' not in old_capacity
+        assert 'queued_nodes' not in old_capacity
+        assert 'in_progress_nodes' not in old_capacity
+        assert 'capacity_condition' not in old_capacity
+        mock_get_version.return_value = 62
+
+        new_result = return_value_serializers.serialize_kubernetes_node_info(
+            copy.deepcopy(data))
+
+        assert json.loads(
+            new_result)['autoscaling_capacity'] == data['autoscaling_capacity']
+
+    @mock.patch(
+        'sky.server.requests.serializers.return_value_serializers.versions.get_remote_api_version'
+    )
     def test_remote_version_none_keeps_is_ready(self, mock_get_version):
         """Test that is_ready is kept when remote_api_version is None."""
         mock_get_version.return_value = None

@@ -83,6 +83,7 @@ import {
 import {
   NonCapitalizedTooltip,
   LastUpdatedTimestamp,
+  TimestampWithTooltip,
 } from '@/components/utils';
 import { PaginationControls } from '@/components/elements/PaginationControls';
 import { Tooltip } from '@nextui-org/tooltip';
@@ -714,6 +715,60 @@ export const NodeJobHistory = ({
   );
 };
 
+function KubernetesCapacityIssue({ demand }) {
+  const issues = demand?.capacityIssues || [];
+  if (issues.length === 0) return null;
+
+  const firstIssue = issues[0];
+  const tooltip = issues
+    .map(
+      (issue) =>
+        `${issue.nodePool || 'Node pool'}: ${issue.reason}${
+          issue.message ? ` — ${issue.message}` : ''
+        }`
+    )
+    .join('\n');
+  const transitionDate = firstIssue.lastTransitionTime
+    ? new Date(firstIssue.lastTransitionTime)
+    : null;
+
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-xs">
+      <NonCapitalizedTooltip
+        content={tooltip}
+        className="text-sm text-muted-foreground"
+      >
+        <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800 cursor-help">
+          <AlertTriangleIcon className="h-3 w-3" />
+          Waiting for provider capacity
+        </span>
+      </NonCapitalizedTooltip>
+      {transitionDate && !Number.isNaN(transitionDate.getTime()) && (
+        <TimestampWithTooltip date={transitionDate} />
+      )}
+    </div>
+  );
+}
+
+function KubernetesDemandSummary({ activeJobs, demand }) {
+  const pendingPods = demand?.pendingPods || 0;
+  const queuedNodes = demand?.queuedNodes || 0;
+  const inProgressNodes = demand?.inProgressNodes || 0;
+
+  return (
+    <div className="text-gray-500 tabular-nums whitespace-nowrap">
+      <div>
+        {activeJobs} {activeJobs === 1 ? 'job' : 'jobs'} · {pendingPods} pending{' '}
+        {pendingPods === 1 ? 'pod' : 'pods'}
+      </div>
+      <div className="text-[11px] text-gray-400">
+        {queuedNodes} queued · {inProgressNodes} provisioning
+      </div>
+      <KubernetesCapacityIssue demand={demand} />
+    </div>
+  );
+}
+
 // Reusable component for infrastructure sections (SSH Node Pool or Kubernetes)
 export function InfrastructureSection({
   title,
@@ -726,6 +781,7 @@ export function InfrastructureSection({
   handleContextClick,
   contextStats = {},
   jobsData = {},
+  demandByContext = {},
   isJobsDataLoading = true,
   isClusterDataLoading = true, // Loading state for cluster data
   isSSH = false, // To differentiate between SSH and Kubernetes
@@ -789,6 +845,7 @@ export function InfrastructureSection({
 
     const contextStatsKey = buildContextStatsKey(context, { isSSH, isSlurm });
     const stats = contextStats[contextStatsKey] || { clusters: 0, jobs: 0 };
+    const demand = demandByContext[context] || null;
 
     // Kubernetes uses progressive per-context loading; Slurm/SSH load all at once.
     const hasGpuData =
@@ -816,6 +873,7 @@ export function InfrastructureSection({
       typeAgg,
       contextStatsKey,
       stats,
+      demand,
       hasGpuData,
       hasNodeData,
       aggregatedCpu,
@@ -928,6 +986,11 @@ export function InfrastructureSection({
                   <th className="p-3 text-left font-medium text-gray-600 whitespace-nowrap">
                     Nodes
                   </th>
+                  {!isSSH && !isSlurm && (
+                    <th className="p-3 text-left font-medium text-gray-600 whitespace-nowrap min-w-[190px]">
+                      Demand
+                    </th>
+                  )}
                   {!isSlurm && (
                     <th className="p-3 text-left font-medium text-gray-600 whitespace-nowrap">
                       CPU
@@ -961,6 +1024,7 @@ export function InfrastructureSection({
                     typeAgg,
                     contextStatsKey,
                     stats,
+                    demand,
                     hasGpuData,
                     hasNodeData,
                     aggregatedCpu,
@@ -1126,6 +1190,20 @@ export function InfrastructureSection({
                         >
                           {!hasNodeData ? <SkeletonBadge /> : nodes.length}
                         </td>
+                        {!isSSH && !isSlurm && (
+                          <td className={sharedCellClass} rowSpan={subRowCount}>
+                            {!hasNodeData || isJobsDataLoading ? (
+                              <SkeletonBadge />
+                            ) : (
+                              <KubernetesDemandSummary
+                                activeJobs={
+                                  jobsData[contextStatsKey]?.jobs || 0
+                                }
+                                demand={demand}
+                              />
+                            )}
+                          </td>
+                        )}
                         {!isSlurm && (
                           <td
                             className={`${sharedCellClass} text-gray-500 tabular-nums whitespace-nowrap`}
@@ -1184,6 +1262,7 @@ export function InfrastructureSection({
                 typeAgg,
                 contextStatsKey,
                 stats,
+                demand,
                 hasGpuData,
                 hasNodeData,
                 aggregatedCpu,
@@ -1204,6 +1283,20 @@ export function InfrastructureSection({
                   loading: isJobsDataLoading,
                   value: jobsData[contextStatsKey]?.jobs || 0,
                 },
+                ...(!isSSH && !isSlurm
+                  ? [
+                      {
+                        label: 'Pending pods',
+                        loading: !hasNodeData,
+                        value: demand?.pendingPods || 0,
+                      },
+                      {
+                        label: 'Queued nodes',
+                        loading: !hasNodeData,
+                        value: demand?.queuedNodes || 0,
+                      },
+                    ]
+                  : []),
                 { label: 'Nodes', loading: !hasNodeData, value: nodes.length },
                 ...(!isSlurm
                   ? [
@@ -1274,6 +1367,9 @@ export function InfrastructureSection({
                       </div>
                     ))}
                   </div>
+                  {!isSSH && !isSlurm && hasNodeData && (
+                    <KubernetesCapacityIssue demand={demand} />
+                  )}
                   {hasGpuData && typeAgg.length > 0 && (
                     <div className="border-t border-gray-100 pt-3 space-y-2">
                       {typeAgg.map((t) => (
@@ -2756,6 +2852,9 @@ export function GPUs() {
   const [allKubeContextNames, setAllKubeContextNames] = useState([]);
   const [perContextGPUs, setPerContextGPUs] = useState([]);
   const [perNodeGPUs, setPerNodeGPUs] = useState([]);
+  const [kubernetesDemandByContext, setKubernetesDemandByContext] = useState(
+    {}
+  );
   // Track which contexts have had their GPU/node data loaded (for progressive loading)
   const [loadedContexts, setLoadedContexts] = useState(new Set());
   const [allSlurmGPUs, setAllSlurmGPUs] = useState([]);
@@ -2962,6 +3061,7 @@ export function GPUs() {
         setAllKubeContextNames([]);
         setPerContextGPUs([]);
         setPerNodeGPUs([]);
+        setKubernetesDemandByContext({});
         setContextStats({});
         setContextWorkspaceMap({});
         setContextErrors({});
@@ -3051,6 +3151,7 @@ export function GPUs() {
         setAllKubeContextNames([]);
         setPerContextGPUs([]);
         setPerNodeGPUs([]);
+        setKubernetesDemandByContext({});
         setContextWorkspaceMap({});
         setContextErrors({});
         setAvailableWorkspaces([]);
@@ -3089,6 +3190,7 @@ export function GPUs() {
         if (showLoadingIndicators) {
           setPerContextGPUs([]);
           setPerNodeGPUs([]);
+          setKubernetesDemandByContext({});
           setContextErrors({});
           setLoadedContexts(new Set());
         }
@@ -3131,6 +3233,11 @@ export function GPUs() {
               return [...filtered, ...gpuData.perNodeGPUs];
             });
 
+            setKubernetesDemandByContext((prev) => ({
+              ...prev,
+              [context]: gpuData.demand,
+            }));
+
             // Update context errors if there was an error
             if (gpuData.error) {
               setContextErrors((prev) => ({
@@ -3142,6 +3249,10 @@ export function GPUs() {
           .catch((error) => {
             // Mark context as loaded even on error to prevent infinite spinner
             setLoadedContexts((prev) => new Set([...prev, context]));
+            setKubernetesDemandByContext((prev) => ({
+              ...prev,
+              [context]: null,
+            }));
             setContextErrors((prev) => ({
               ...prev,
               [context]: error.message || 'Failed to load GPU data',
@@ -3164,6 +3275,7 @@ export function GPUs() {
       setAllKubeContextNames([]);
       setPerContextGPUs([]);
       setPerNodeGPUs([]);
+      setKubernetesDemandByContext({});
       setContextWorkspaceMap({});
       setContextErrors({});
       setAvailableWorkspaces([]);
@@ -4004,6 +4116,7 @@ export function GPUs() {
         handleContextClick={handleContextClick}
         contextStats={contextStats}
         jobsData={sshAndKubeJobsData}
+        demandByContext={kubernetesDemandByContext}
         isJobsDataLoading={sshAndKubeJobsDataLoading}
         isClusterDataLoading={clusterDataLoading}
         isSSH={false}

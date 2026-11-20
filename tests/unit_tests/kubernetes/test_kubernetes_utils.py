@@ -969,6 +969,16 @@ def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
                 },
                 'status': {
                     'currentNodes': 3,
+                    'targetNodes': 5,
+                    'queuedNodes': 1,
+                    'inProgress': 1,
+                    'conditions': [{
+                        'type': 'Capacity',
+                        'status': 'False',
+                        'reason': 'CWInsufficientCapacity',
+                        'message': '1 pending node awaits spot capacity.',
+                        'lastTransitionTime': '2026-10-25T03:00:05Z',
+                    }],
                 },
             }]
         }
@@ -989,6 +999,15 @@ def test_cks_autoscaling_capacity_discovers_enabled_pools_and_rereads_bounds():
         'current_nodes': 3,
         'min_nodes': 1,
         'max_nodes': 10,
+        'target_nodes': 5,
+        'queued_nodes': 1,
+        'in_progress_nodes': 1,
+        'capacity_condition': {
+            'status': 'False',
+            'reason': 'CWInsufficientCapacity',
+            'message': '1 pending node awaits spot capacity.',
+            'lastTransitionTime': '2026-10-25T03:00:05Z',
+        },
     }]
     assert second[0].max_nodes == 20
     api.list_cluster_custom_object.assert_has_calls([

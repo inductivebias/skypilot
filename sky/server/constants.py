@@ -10,7 +10,7 @@ from sky.skylet import constants
 # based on version info is needed.
 # For more details and code guidelines, refer to:
 # https://docs.skypilot.co/en/latest/developers/CONTRIBUTING.html#backward-compatibility-guidelines
-API_VERSION = 61  # Kubernetes pod scheduling evidence in node snapshots
+API_VERSION = 62  # Kubernetes provider demand in node snapshots
 
 # The minimum peer API version that the code should still work with.
 # Notes (dev):
@@ -98,6 +98,10 @@ MIN_KUBERNETES_POD_ALLOCATIONS_API_VERSION = 60
 # Kubernetes node snapshots can include selected pods even before scheduling,
 # with phase and condition evidence. Added in API_VERSION 61.
 MIN_KUBERNETES_POD_OBSERVATIONS_API_VERSION = 61
+
+# Kubernetes autoscaling capacity can include provider queue counts and its
+# exact capacity condition. Added in API_VERSION 62.
+MIN_KUBERNETES_PROVIDER_DEMAND_API_VERSION = 62
 
 # Prefix for API request names.
 REQUEST_NAME_PREFIX = 'sky.'

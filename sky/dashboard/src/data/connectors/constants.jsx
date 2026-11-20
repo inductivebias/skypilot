@@ -57,7 +57,7 @@ export const WS_API_URL = API_URL.replace(/^http/, 'ws');
 // it can't over-report support for wire formats its code doesn't handle.
 // Enforced by tests/unit_tests/test_api_version_consistency.py.
 // FL:START — Keep this dashboard build aligned with the bundled server.
-export const CLIENT_API_VERSION = '61';
+export const CLIENT_API_VERSION = '62';
 // FL:END
 // Header names expected by the server's APIVersionMiddleware. Mirrors
 // sky/server/constants.py:API_VERSION_HEADER / VERSION_HEADER.
