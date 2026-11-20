@@ -6,8 +6,11 @@ moment another replica's refresh daemon could acquire the consolidation
 lock. The helper must be best-effort — it runs on shutdown paths where
 raising would either prevent SIGTERM or stall drain.
 """
+import asyncio
 import signal
 from unittest import mock
+
+import pytest
 
 from sky.jobs import scheduler
 from sky.jobs import state as managed_job_state
@@ -110,3 +113,37 @@ class TestKillLocalConsolidationControllers:
                 mock.patch.object(scheduler.os, 'kill') as kill_mock:
             scheduler.kill_local_job_controllers(sig=signal.SIGKILL)
         kill_mock.assert_called_once_with(101, signal.SIGKILL)
+
+
+@pytest.mark.asyncio
+async def test_scheduled_launch_release_unblocks_next_job(monkeypatch):
+    monkeypatch.setattr(scheduler.state, 'get_pool_from_job_id',
+                        mock.MagicMock(return_value=None))
+    monkeypatch.setattr(scheduler.file_content_utils, 'get_job_dag_content',
+                        mock.MagicMock(return_value=None))
+    monkeypatch.setattr(scheduler.state, 'scheduler_set_launching_async',
+                        mock.AsyncMock())
+    monkeypatch.setattr(scheduler.state, 'scheduler_set_alive_async',
+                        mock.AsyncMock())
+    monkeypatch.setattr(scheduler.controller_utils, 'LAUNCHES_PER_WORKER', 1)
+    starting = set()
+    lock = asyncio.Lock()
+    signal_condition = asyncio.Condition(lock=lock)
+
+    first = scheduler.scheduled_launch(1, starting, lock, signal_condition)
+    release_first = await first.__aenter__()
+    assert starting == {1}
+
+    second = scheduler.scheduled_launch(2, starting, lock, signal_condition)
+    enter_second = asyncio.create_task(second.__aenter__())
+    await asyncio.sleep(0)
+    assert not enter_second.done()
+
+    await release_first()
+    release_second = await asyncio.wait_for(enter_second, timeout=1)
+
+    assert starting == {2}
+    await release_second()
+    await second.__aexit__(None, None, None)
+    await first.__aexit__(None, None, None)
+    assert starting == set()
