@@ -3073,7 +3073,7 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
       <div className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
           <div className="flex items-center">
-            <h3 className="text-lg font-semibold">Direct VMs</h3>
+            <h3 className="text-lg font-semibold">Personal VMs</h3>
             <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
               outside scheduler
             </span>
@@ -3104,8 +3104,8 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
           </div>
         </div>
         <p className="text-sm text-gray-500 mb-4">
-          Provider-owned VMs created outside SkyPilot. They are inventory only
-          and are not included in schedulable capacity.
+          Personal VMs created outside SkyPilot. They are inventory only and are
+          not included in schedulable capacity.
         </p>
         {inventory?.errors?.map((error) => (
           <div
@@ -3123,8 +3123,8 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
         ) : visibleInstances.length === 0 ? (
           <p className="text-sm text-gray-500">
             {showStopped
-              ? 'No direct VMs found.'
-              : 'No running or transitional direct VMs found.'}
+              ? 'No personal VMs found.'
+              : 'No running or transitional personal VMs found.'}
           </p>
         ) : (
           <>
@@ -3157,7 +3157,7 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
             </div>
             {filteredInstances.length === 0 ? (
               <p className="mb-3 text-sm text-gray-500">
-                No direct VMs match the selected node types.
+                No personal VMs match the selected node types.
               </p>
             ) : (
               <div className="space-y-2 mb-3">
@@ -4697,7 +4697,7 @@ export function GPUs() {
 
       if (directVMInventory.configured || directVMLoading) {
         sections.push({
-          name: 'Direct VMs',
+          name: 'Personal VMs',
           render: renderDirectVMInfrastructure,
           hasActivity: directVMInventory.instances.length > 0,
           tertiary: true,

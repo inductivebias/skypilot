@@ -51,7 +51,7 @@ describe('getNodeJobInfrastructureOptions', () => {
 
 it('keeps tertiary infrastructure after inactive SSH node pools', () => {
   const sections = [
-    { name: 'Direct VMs', hasActivity: true, tertiary: true, priority: 6 },
+    { name: 'Personal VMs', hasActivity: true, tertiary: true, priority: 6 },
     { name: 'Kubernetes', hasActivity: true, priority: 2 },
     { name: 'SSH Node Pool', hasActivity: false, priority: 5 },
   ];
@@ -59,7 +59,7 @@ it('keeps tertiary infrastructure after inactive SSH node pools', () => {
   expect(sortInfrastructureSections(sections).map(({ name }) => name)).toEqual([
     'Kubernetes',
     'SSH Node Pool',
-    'Direct VMs',
+    'Personal VMs',
   ]);
 });
 
@@ -236,6 +236,9 @@ it('renders direct VMs separately from schedulable capacity', () => {
     />
   );
 
+  expect(
+    screen.getByRole('heading', { name: 'Personal VMs' })
+  ).toBeInTheDocument();
   expect(screen.queryByText('alice-gpu')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '1 CPU nodes' })).toHaveAttribute(
     'aria-pressed',

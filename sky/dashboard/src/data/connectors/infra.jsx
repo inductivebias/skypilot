@@ -84,7 +84,7 @@ export async function getDirectVMInventory() {
   if (!response.ok) {
     const error = await getErrorMessageFromResponse(response);
     throw new Error(
-      `Direct VM inventory failed with status ${response.status}: ${error}`
+      `Personal VM inventory failed with status ${response.status}: ${error}`
     );
   }
   const inventory = await response.json();
