@@ -8,6 +8,7 @@ resources:
 import asyncio
 import logging
 import os
+import time
 import traceback
 import typing
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple
@@ -607,6 +608,7 @@ class StrategyExecutor:
         while True:
             retry_cnt += 1
             unexpected_failure_reason: Optional[str] = None
+            worker_submitted_at: Optional[float] = None
             try:
                 async with scheduler.scheduled_launch(
                         self.job_id,
@@ -685,11 +687,15 @@ class StrategyExecutor:
                                 # to drive the provisioning spinner shown by
                                 # `sky jobs launch` / `sky jobs logs`, matching
                                 # the `sky launch` experience.
-                                await asyncio.to_thread(
+                                job_id_on_cluster, _ = await asyncio.to_thread(
                                     sdk.stream_and_get,
                                     request_id,
                                     relay_rich_status=True,
                                 )
+                                if job_id_on_cluster is not None:
+                                    self.job_id_on_pool_cluster = (
+                                        job_id_on_cluster)
+                                    worker_submitted_at = time.time()
                             except asyncio.CancelledError:
                                 if request_id:
                                     await self._cancel_request(request_id)
@@ -729,6 +735,7 @@ class StrategyExecutor:
                             assert job_id_on_pool_cluster is not None, (
                                 self.cluster_name, self.job_id)
                             self.job_id_on_pool_cluster = job_id_on_pool_cluster
+                            worker_submitted_at = time.time()
                             await state.set_job_id_on_pool_cluster_async(
                                 self.job_id, job_id_on_pool_cluster)
                         logger.info('Managed job cluster launched.')
@@ -847,6 +854,11 @@ class StrategyExecutor:
                             else:
                                 logger.debug('Not populating instance links '
                                              'since the cluster name is None')
+                        if worker_submitted_at is not None:
+                            logger.info('Worker submission acknowledged with '
+                                        'job ID '
+                                        f'{self.job_id_on_pool_cluster}.')
+                            return worker_submitted_at
                         job_submitted_at, cluster_unavailable = await (
                             self._wait_until_job_starts_on_cluster())
                         if job_submitted_at is not None:
