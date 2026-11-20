@@ -258,7 +258,7 @@ it('renders direct VMs separately from schedulable capacity', () => {
     screen.getByTitle(
       'Running a100-40: 1 node · 2 physical GPUs · Machines: a2-highgpu-1g (1) · Owners: alice (1)'
     )
-  ).toHaveClass('bg-orange-400', 'text-gray-800');
+  ).toHaveClass('bg-yellow-500', 'text-gray-800');
   expect(screen.queryByText('GCP · us-central1-b')).not.toBeInTheDocument();
   expect(screen.queryByText('bob-cpu')).not.toBeInTheDocument();
 
@@ -270,7 +270,7 @@ it('renders direct VMs separately from schedulable capacity', () => {
   );
   expect(
     screen.getByTitle('Running n2-standard-8: 1 node · Owners: carol (1)')
-  ).toBeInTheDocument();
+  ).toHaveClass('bg-green-600', 'text-gray-800');
 
   fireEvent.click(screen.getByRole('button', { name: 'Show all VMs' }));
 

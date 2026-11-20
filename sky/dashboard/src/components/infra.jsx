@@ -2811,8 +2811,8 @@ const STOPPED_DIRECT_VM_STATUSES = new Set([
 ]);
 
 const DIRECT_VM_TYPE_COLORS = {
-  cpu: ['bg-yellow-100', 'bg-yellow-200', 'bg-yellow-300', 'bg-yellow-400'],
-  gpu: ['bg-orange-100', 'bg-orange-200', 'bg-orange-300', 'bg-orange-400'],
+  cpu: ['bg-green-600'],
+  gpu: ['bg-yellow-500'],
   stopped: ['bg-gray-200', 'bg-gray-300', 'bg-slate-200', 'bg-stone-300'],
 };
 
@@ -3136,7 +3136,7 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
                 onClick={() => toggleNodeType('cpu')}
                 className={`rounded px-2 py-1 font-medium transition-opacity ${
                   visibleNodeTypes.cpu
-                    ? 'bg-yellow-100 text-yellow-900 ring-1 ring-inset ring-yellow-300'
+                    ? 'bg-green-100 text-green-900 ring-1 ring-inset ring-green-300'
                     : 'bg-gray-100 text-gray-500 opacity-60 hover:opacity-100'
                 }`}
               >
@@ -3148,7 +3148,7 @@ export function DirectVMInfrastructure({ inventory, isLoading }) {
                 onClick={() => toggleNodeType('gpu')}
                 className={`rounded px-2 py-1 font-medium transition-opacity ${
                   visibleNodeTypes.gpu
-                    ? 'bg-orange-100 text-orange-900 ring-1 ring-inset ring-orange-300'
+                    ? 'bg-yellow-100 text-yellow-900 ring-1 ring-inset ring-yellow-300'
                     : 'bg-gray-100 text-gray-500 opacity-60 hover:opacity-100'
                 }`}
               >
