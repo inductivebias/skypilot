@@ -91,8 +91,7 @@ async def wait_for_request_to_start(
     # If the request has been stuck in pending for
     # _SHORT_REQUEST_SPINNER_TIMEOUT seconds, we show the waiting spinner
     show_request_waiting_spinner = (not plain_logs and
-                                    request_task.schedule_type
-                                    == requests_lib.ScheduleType.LONG)
+                                    request_task.schedule_type.is_long)
 
     if show_request_waiting_spinner:
         yield status_msg.init()

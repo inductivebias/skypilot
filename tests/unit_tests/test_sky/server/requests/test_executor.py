@@ -106,6 +106,32 @@ def dummy_entrypoint(*args, **kwargs):
     return 'success'
 
 
+def test_start_creates_separate_protected_long_worker(monkeypatch):
+    worker_config = server_config.WorkerConfig(garanteed_parallelism=1,
+                                               burstable_parallelism=0,
+                                               num_db_connections_per_worker=0)
+    config = server_config.ServerConfig(
+        num_server_workers=1,
+        long_worker_config=worker_config,
+        protected_long_worker_config=worker_config,
+        short_worker_config=worker_config,
+        num_db_connections_per_worker=0,
+        queue_backend=server_config.QueueBackend.LOCAL)
+    monkeypatch.setattr(executor.queue_base, 'get_queue_backend_factory',
+                        executor.queue_base.LocalQueueFactory)
+    monkeypatch.setattr(executor.RequestWorker, 'run_in_background',
+                        lambda self: None)
+
+    queue_server, workers = executor.start(config)
+
+    assert queue_server is None
+    assert [worker.schedule_type for worker in workers] == [
+        requests_lib.ScheduleType.LONG,
+        requests_lib.ScheduleType.LONG_PROTECTED,
+        requests_lib.ScheduleType.SHORT,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_execute_request_coroutine_ctx_cancelled_on_cancellation(
         isolated_database):

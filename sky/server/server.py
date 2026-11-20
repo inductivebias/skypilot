@@ -1845,12 +1845,23 @@ async def launch(launch_body: payloads.LaunchBody,
     """Launches a cluster or task."""
     request_id = request.state.request_id
     logger.info(f'Launching request: {request_id}')
+    schedule_type = requests_lib.ScheduleType.LONG
+    try:
+        dag = dag_utils.load_chain_dag_from_yaml_str(launch_body.task)
+        if any(
+                task.metadata.get('launch_executor_lane') == 'protected'
+                for task in dag.tasks):
+            schedule_type = requests_lib.ScheduleType.LONG_PROTECTED
+    except Exception as e:  # pylint: disable=broad-except
+        # Scheduling decoration is optional; execution remains authoritative
+        # for validating and reporting an invalid task.
+        logger.debug(f'Ignoring invalid launch executor lane metadata: {e}')
     await executor.schedule_request_async(
         request_id,
         request_name=request_names.RequestName.CLUSTER_LAUNCH,
         request_body=launch_body,
         func=execution.launch,
-        schedule_type=requests_lib.ScheduleType.LONG,
+        schedule_type=schedule_type,
         request_cluster_name=launch_body.cluster_name,
         retryable=launch_body.retry_until_up,
         auth_user=request.state.auth_user,
@@ -2491,7 +2502,7 @@ async def stream(
         # req.log_path is derived from request_id,
         # so it's ok to just grab the request_id in the above query.
         log_path_to_stream = request_task.log_path
-        if request_task.schedule_type == requests_lib.ScheduleType.LONG:
+        if request_task.schedule_type.is_long:
             polling_interval = stream_utils.LONG_REQUEST_POLL_INTERVAL
         del request_task
     else:

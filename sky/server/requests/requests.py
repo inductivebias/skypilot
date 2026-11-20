@@ -167,8 +167,15 @@ REQUEST_COLUMNS = [
 class ScheduleType(enum.Enum):
     """The schedule type for the requests."""
     LONG = 'long'
+    # Reserved for protected cluster launches so ordinary long requests cannot
+    # occupy every executor needed to create their workload objects.
+    LONG_PROTECTED = 'long_protected'
     # Queue for requests that should be executed quickly for a quick response.
     SHORT = 'short'
+
+    @property
+    def is_long(self) -> bool:
+        return self in {ScheduleType.LONG, ScheduleType.LONG_PROTECTED}
 
 
 @dataclasses.dataclass

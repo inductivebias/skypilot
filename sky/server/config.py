@@ -80,6 +80,7 @@ class WorkerConfig:
 class ServerConfig:
     num_server_workers: int
     long_worker_config: WorkerConfig
+    protected_long_worker_config: WorkerConfig
     short_worker_config: WorkerConfig
     num_db_connections_per_worker: int
     queue_backend: QueueBackend
@@ -131,8 +132,9 @@ def compute_server_config(
     max_parallel_for_long = _max_long_worker_parallism(cpu_count,
                                                        mem_size_gb,
                                                        local=not deploy)
+    protected_long_workers = 1 if deploy else 0
     max_parallel_for_short = _max_short_worker_parallism(
-        mem_size_gb, max_parallel_for_long)
+        mem_size_gb, max_parallel_for_long + protected_long_workers)
     queue_backend = QueueBackend.MULTIPROCESSING
     burstable_parallel_for_long = 0
     burstable_parallel_for_short = 0
@@ -144,8 +146,8 @@ def compute_server_config(
 
     # +1 for the event loop running the main process
     # and gc daemons in the '__main__' body of sky/server/server.py
-    max_parallel_all_workers = (max_parallel_for_long + max_parallel_for_short +
-                                num_server_workers + 1)
+    max_parallel_all_workers = (max_parallel_for_long + protected_long_workers +
+                                max_parallel_for_short + num_server_workers + 1)
 
     if not deploy:
         # For local mode, use local queue backend since we only run 1 uvicorn
@@ -194,13 +196,18 @@ def compute_server_config(
         logger.info(
             f'SkyPilot API server will start {num_server_workers} server '
             f'processes with {max_parallel_for_long} background workers for '
-            f'long requests and will allow at max {max_parallel_for_short} '
-            'short requests in parallel.')
+            f'long requests, {protected_long_workers} for protected launches, '
+            f'and will allow at max {max_parallel_for_short} short requests '
+            'in parallel.')
     return ServerConfig(
         num_server_workers=num_server_workers,
         queue_backend=queue_backend,
         long_worker_config=WorkerConfig(
             garanteed_parallelism=max_parallel_for_long,
+            burstable_parallelism=burstable_parallel_for_long,
+            num_db_connections_per_worker=num_db_connections_per_worker),
+        protected_long_worker_config=WorkerConfig(
+            garanteed_parallelism=protected_long_workers,
             burstable_parallelism=burstable_parallel_for_long,
             num_db_connections_per_worker=num_db_connections_per_worker),
         short_worker_config=WorkerConfig(
