@@ -405,6 +405,7 @@ async def test_prepare_request_passes_auth_user():
 async def test_launch_endpoint_passes_auth_user():
     """Test that launch endpoint passes auth_user to schedule_request_async."""
     from sky.server.requests import payloads
+    from sky.server.requests import requests as requests_lib
 
     auth_user = models.User(id='launch-user-id', name='Launch User')
     request = mock.MagicMock()
@@ -423,8 +424,29 @@ async def test_launch_endpoint_passes_auth_user():
         mock_schedule.assert_awaited_once()
         args, kwargs = mock_schedule.call_args
         assert kwargs['auth_user'] == auth_user
+        assert kwargs['schedule_type'] == requests_lib.ScheduleType.LONG
         # request_id is passed as first positional argument
         assert args[0] == 'launch-request-id'
+
+
+@pytest.mark.asyncio
+async def test_launch_endpoint_routes_protected_task_to_reserved_executor():
+    from sky.server.requests import payloads
+    from sky.server.requests import requests as requests_lib
+
+    request = mock.MagicMock()
+    request.state.request_id = 'protected-launch'
+    request.state.auth_user = models.User(id='user-id', name='User')
+    launch_body = payloads.LaunchBody(
+        task='name: protected\n_metadata:\n  launch_executor_lane: protected\n',
+        cluster_name='protected-cluster')
+
+    with mock.patch('sky.server.server.executor.schedule_request_async',
+                    new_callable=mock.AsyncMock) as mock_schedule:
+        await server.launch(launch_body, request)
+
+    assert (mock_schedule.await_args.kwargs['schedule_type'] ==
+            requests_lib.ScheduleType.LONG_PROTECTED)
 
 
 # --- Tests for cleanup_unreferenced_file_mounts ---
