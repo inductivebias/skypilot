@@ -50,7 +50,7 @@ import shutil
 import signal
 import sys
 import typing
-from typing import List, Optional, Set
+from typing import AsyncIterator, Awaitable, Callable, List, Optional, Set
 import uuid
 
 import filelock
@@ -367,7 +367,7 @@ async def scheduled_launch(
     starting: Set[int],
     starting_lock: asyncio.Lock,
     starting_signal: asyncio.Condition,
-):
+) -> AsyncIterator[Callable[[], Awaitable[None]]]:
     """Launch as part of an ongoing job.
 
     A newly started job will already be LAUNCHING, and this will immediately
@@ -384,16 +384,25 @@ async def scheduled_launch(
 
     On exiting the context, the job will transition to ALIVE.
 
+    Yields an idempotent callback that may release the controller-local launch
+    slot earlier, once the inner API server has durably queued the provisioning
+    request. The API server's long-request executor remains the resource-based
+    provisioning bound.
+
     This should only be used within the job controller for the given job_id. If
     multiple uses of this context are nested, behavior is undefined. Don't do
     that.
     """
+
+    async def noop_release() -> None:
+        return
+
     pool = state.get_pool_from_job_id(job_id)
     # For pool, since there is no execution.launch, we don't need to have all
     # the ALIVE_WAITING state. The state transition will be
     # WAITING -> ALIVE -> DONE without any intermediate transitions.
     if pool is not None:
-        yield
+        yield noop_release
         return
 
     # For JobGroups, multiple tasks share the same job_id but each launches
@@ -403,7 +412,7 @@ async def scheduled_launch(
     # TODO(zhwu): make JobGroup scheduler aware.
     dag_content = file_content_utils.get_job_dag_content(job_id)
     if dag_content is not None and dag_utils.is_job_group_yaml_str(dag_content):
-        yield
+        yield noop_release
         return
 
     assert starting_lock == starting_signal._lock, (  # type: ignore #pylint: disable=protected-access
@@ -424,16 +433,30 @@ async def scheduled_launch(
 
     await state.scheduler_set_launching_async(job_id)
 
-    try:
-        yield
-    except Exception as e:
-        raise e
-    else:
+    released = False
+
+    async def release() -> None:
+        """Release launch capacity after durable inner request submission."""
+        nonlocal released
+        if released:
+            return
         await state.scheduler_set_alive_async(job_id)
-    finally:
         async with starting_lock:
             starting.remove(job_id)
             starting_signal.notify()
+        released = True
+
+    try:
+        yield release
+    except Exception as e:
+        raise e
+    else:
+        await release()
+    finally:
+        if not released:
+            async with starting_lock:
+                starting.remove(job_id)
+                starting_signal.notify()
 
 
 def job_done(job_id: int, idempotent: bool = False) -> None:
